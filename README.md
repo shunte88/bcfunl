@@ -1,4 +1,8 @@
-# bcfunl
+<p align="center">
+  <img src="assets/bcfunl.png" alt="Bandcamp Funnel" width="320"/>
+</p>
+
+# bcfunl - The Bandcamp Funnel
 
 Rust CLI to download an authenticated Bandcamp collection with SQLite history.
 
@@ -9,13 +13,13 @@ Requires Rust/Cargo and the system SQLite library and development files
 no Python, browser automation, or external `sqlite3` command is used at runtime.
 Parallel mode additionally requires a working `aria2c` on PATH.
 Builds reuse the sibling VCW checkout at `../vcw` (`vcw-metadata` and
-`vcw-types`), just as mcfunl does. Keep that checkout available when building
+`vcw-types`). Keep that checkout available when building
 on another machine; the compiled executable does not need it at runtime.
 Export your logged-in **bandcamp.com** cookies in Netscape format.
 
 ```sh
 cargo build --release
-./target/release/bcfunl --user stuarthunter --count 100 \
+./target/release/bcfunl --user johnsmith --count 100 \
   --output ./downloads --format FLAC
 ```
 
@@ -23,7 +27,7 @@ Options:
 
 | Option | Behavior |
 | --- | --- |
-| `--user` | Bandcamp username; defaults to `stuarthunter`. |
+| `--user` | Bandcamp username; defaults to `johnsmith`. |
 | `--artist` | Case-insensitive artist substring; offline SQL supports LIKE wildcards. Download mode uses Search my Collection and checks returned artist names; processing filters stored artists. |
 | `--cookies` | Cookie export; defaults to `bandcamp.cookies.txt`. |
 | `--fromdt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
@@ -39,10 +43,8 @@ Options:
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
 | `--template` | Processing filename rule; defaults to the example below. |
 
-For example, `--fromdt 2025-01-01 --todt 2025-12-31` selects purchases made in
-2025. Unknown purchase dates are excluded when a date filter is active.
-The old positional interface and JSONL link/event output have been replaced.
-Existing JSONL exports are neither imported nor deleted.
+For example, `--fromdt 2026-11-01 --todt 2026-12-01` selects purchases made in November 
+2026. Unknown purchase dates are excluded when a date filter is active.
 
 ## Format and files
 
@@ -79,15 +81,15 @@ Original captured `release_title` text is retained; `sanitized_title` supplies
 clean names downstream. Known artist-prefixed hyphenated titles use the final
 ` - ` segment, following `fixtitle.txt`. Trailing single-token bracketed catalog
 codes containing letters and digits move to uppercase `catalog_num`; dates,
-common disc/volume/BPM markers and multiword edition text remain in the title.
-Existing nonempty catalog metadata wins. Migration backfills old rows once and
+common disc/volume/BPM markers and multi-word edition text remain in the title.
+Existing nonempty catalog metadata wins. Migration back-fills old rows once and
 corrects artist display without resetting download/processing history. Existing
 archives and published folders are not renamed by migration.
 
 To download up to eight releases at once:
 
 ```sh
-./target/release/bcfunl --user stuarthunter --count 100 --parallel 8
+./target/release/bcfunl --user johnsmith --count 100 --parallel 8
 ```
 
 Parallel mode resolves release metadata on the main thread, starts each aria2c
@@ -146,8 +148,8 @@ Processing is offline and uses completed rows in `<output>/collection.sqlite3`
 plus embedded audio tags. Start with a small batch:
 
 ```sh
-cargo run --release -- --process --user stuarthunter \
-  --output /data/bcfstg3 --serverdir /data2/music --count 1 --summary \
+cargo run --release -- --process --user johnsmith \
+  --output /data/bcfstag3 --serverdir /data2/music --count 1 --summary \
   --template "{artist}/{album} [{country_iso}] [{catalog_num}]/{disc}-{track} - {title}"
 ```
 
@@ -353,10 +355,10 @@ Bandcamp lists its [supported download formats](https://get.bandcamp.help/en/art
 ## Artist-scoped runs
 
 ```sh
-./target/release/bcfunl --user stuarthunter --artist "David Holmes" \
-  --output /data/bcfstg --format FLAC --parallel 8 --summary
-./target/release/bcfunl --process --user stuarthunter --artist "David Holmes" \
-  --output /data/bcfstg --serverdir /data/bcfinal-test --summary
+./target/release/bcfunl --user johnsmith --artist "David Holmes" \
+  --output /data/bcfstag3 --format FLAC --parallel 8 --summary
+./target/release/bcfunl --process --user johnsmith --artist "David Holmes" \
+  --output /data/bcfstag3 --serverdir /data/bcfinal-test --summary
 ```
 
 Date windows and count still apply after artist filtering. Offline artist matching uses `UPPER(artist) LIKE '%' || ? || '%'`
@@ -532,8 +534,8 @@ the Rust HTTP acquisition path hit sandbox DNS restrictions during this session.
 ## Missing-genre fallback in tag sanitizing
 
 ```sh
-./target/release/bcfunl --process --user stuarthunter \
-  --output /data/bcfstg --serverdir /data/bcfinal-test \
+./target/release/bcfunl --process --user johnsmith \
+  --output /data/bcfstag3 --serverdir /data/bcfinal-test \
   --library /data2/bcfunl/downloads/resources/library.sqlite3 --count 3 --summary
 ```
 
