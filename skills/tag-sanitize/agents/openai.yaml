@@ -1,0 +1,3 @@
+interface:
+  display_name: "Music Tag Sanitizer"
+  short_description: "Normalize music tags and preserve lossless audio"

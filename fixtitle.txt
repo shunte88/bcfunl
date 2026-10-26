@@ -1,0 +1,33 @@
+sqlite3 collection.sqlite3 ".mode box"  \
+"SELECT artist, release_title, \
+replace(trim(case when release_title like artist||'%' and release_title like '% - %' then \
+replace(release_title, rtrim(release_title, replace(release_title, ' - ', '')), '') else \
+release_title end, '''','')) fix_release_title from releases where artist like '%Holmes%';"
+
+┌──────────────────────────┬──────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────┐
+│          artist          │                        release_title                         │                      fix_release_title                       │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes (Featuring Raven Violet) The Blind On A Gallopi │ Yeah X3 (Hvn74012)                                           │
+│                          │ ng Horse Remixes - Yeah X3 (Hvn74012)                        │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes Ft. Raven Violet - 'Blind On A Galloping Horse' │ Blind On A Galloping Horse                                   │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes  David Holmes Ft. Raven Violet - Blind On A Gal │ Blind On A Galloping Horse (Remixes Vol. 1)                  │
+│                          │ loping Horse (Remixes Vol. 1)                                │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes Ft. Raven Violet - Blind On A Galloping Horse ( │ Blind On A Galloping Horse (Remixes Vol. 2)                  │
+│                          │ Remixes Vol. 2)                                              │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes (Featuring Raven Violet) The Blind On A Gallopi │ Yeah X3 (Hvn74012r)                                          │
+│                          │ ng Horse Remixes - Yeah X3 (Hvn74012r)                       │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes (Featuring Raven Violet) The Blind On A Gallopi │ Necessary Genius (Hvn73112)                                  │
+│                          │ ng Horse Remixes - Necessary Genius (Hvn73112)               │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ David Holmes             │ David Holmes Ft. Raven Violet - Blind On A Galloping Horse ( │ Blind On A Galloping Horse (Remixes Vol. 3)                  │
+│                          │ Remixes Vol. 3)                                              │                                                              │
+├──────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┤
+│ Bp Fallon & David Holmes │ Bp Fallon & David Holmes - Henry Mccullough Andrew Weatheral │ Henry Mccullough Andrew Weatherall Remixes (Gold & Silver Rs │
+│                          │ l Remixes (Gold & Silver Rsd Editions)                       │ d Editions)                                                  │
+└──────────────────────────┴──────────────────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────┘
+

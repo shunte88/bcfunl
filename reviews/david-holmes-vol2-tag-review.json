@@ -1,0 +1,1011 @@
+{
+  "skill": "tagskill.md",
+  "mode": "read-only handoff; no media writes",
+  "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+  "match": {
+    "accepted_for_track_credit_enrichment": true,
+    "artist": "David Holmes",
+    "album": "Blind On A Galloping Horse (Remixes Vol. 2)",
+    "ordered_track_count": 7,
+    "checks": [
+      {
+        "track": 1,
+        "title_match": true,
+        "source_duration": 330.84,
+        "provider_duration": 330,
+        "difference_seconds": 0.84
+      },
+      {
+        "track": 2,
+        "title_match": true,
+        "source_duration": 238.72,
+        "provider_duration": 238,
+        "difference_seconds": 0.72
+      },
+      {
+        "track": 3,
+        "title_match": true,
+        "source_duration": 423.6,
+        "provider_duration": 423,
+        "difference_seconds": 0.6
+      },
+      {
+        "track": 4,
+        "title_match": true,
+        "source_duration": 459.6,
+        "provider_duration": 459,
+        "difference_seconds": 0.6
+      },
+      {
+        "track": 5,
+        "title_match": true,
+        "source_duration": 446.0,
+        "provider_duration": 446,
+        "difference_seconds": 0.0
+      },
+      {
+        "track": 6,
+        "title_match": true,
+        "source_duration": 334.72,
+        "provider_duration": 334,
+        "difference_seconds": 0.72
+      },
+      {
+        "track": 7,
+        "title_match": true,
+        "source_duration": 288.68,
+        "provider_duration": 288,
+        "difference_seconds": 0.68
+      }
+    ],
+    "format_limit": "Discogs describes WAV; owned files are FLAC. Ordered titles and durations support matching recording content, not proof of an identical container edition. No edition-specific catalog/country/date changes proposed."
+  },
+  "catalog": "Discogs catno none means missing. No existing catalog fields to remove and no catalog number invented.",
+  "records": [
+    {
+      "file": "01-01 - Yeah X 3 - Jordan Nocturne Remix.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "1"
+        ],
+        "ISRC": [
+          "GBPVV2300531"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Yeah X 3 - Jordan Nocturne Remix"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Jordan Nocturne"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Jordan Nocturne"
+        ],
+        "DATE": [
+          "2024"
+        ],
+        "REMIXER": [
+          "Jordan Nocturne"
+        ]
+      },
+      "set": {
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "Jordan Nocturne",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 9714928
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-02 - Necessary Genius - Skymas Remix.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "2"
+        ],
+        "ISRC": [
+          "GBPVV2300432"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Necessary Genius - Skymas Remix"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Skymas"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Skymas"
+        ],
+        "DATE": [
+          "2024"
+        ],
+        "REMIXER": [
+          "Skymas"
+        ]
+      },
+      "set": {
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "Skymas",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 13646131
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-03 - Too Muchroom - Hardway Bros Meet Monkton Uptown Remix.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "3"
+        ],
+        "ISRC": [
+          "GBPVV2300686"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Too Muchroom - Hardway Bros Meet Monkton Uptown Remix"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Hardway Bros Meet Monkton Uptown"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Hardway Bros Meet Monkton Uptown"
+        ],
+        "DATE": [
+          "2024"
+        ],
+        "REMIXER": [
+          "Hardway Bros Meet Monkton Uptown"
+        ]
+      },
+      "set": {
+        "REMIXER": [
+          "Hardway Brothers",
+          "Monkton"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Hardway Brothers",
+          "Monkton"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Hardway Brothers",
+          "Monkton"
+        ],
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "Hardway Brothers",
+              "anv": "Hardway Bros",
+              "role": "Remix",
+              "artist_id": 1118413
+            },
+            {
+              "name": "Monkton",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 16301644
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-04 - Yeah X 3 - X-Press 2 Remix - Instrumental.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "4"
+        ],
+        "ISRC": [
+          "GBPVV2300430"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Yeah X 3 - X-Press 2 Remix - Instrumental"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet"
+        ],
+        "DATE": [
+          "2024"
+        ]
+      },
+      "set": {
+        "REMIXER": [
+          "X-Press 2"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "X-Press 2"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "X-Press 2"
+        ],
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "X-Press 2",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 2937
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-05 - Stop Apologising - Cosmodelica Remix - Instrumental.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "5"
+        ],
+        "ISRC": [
+          "GBPVV2300426"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Stop Apologising - Cosmodelica Remix - Instrumental"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet"
+        ],
+        "DATE": [
+          "2024"
+        ]
+      },
+      "set": {
+        "REMIXER": [
+          "Cosmodelica"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Cosmodelica"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Cosmodelica"
+        ],
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "Cosmodelica",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 1942225
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-06 - Yeah X 3 - Sonic Boom & Panda Bear Reset Remix.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "6"
+        ],
+        "ISRC": [
+          "GBPVV2300492"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Yeah X 3 - Sonic Boom & Panda Bear Reset Remix"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Sonic Boom & Panda Bear Reset"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Sonic Boom & Panda Bear Reset"
+        ],
+        "DATE": [
+          "2024"
+        ],
+        "REMIXER": [
+          "Sonic Boom & Panda Bear Reset"
+        ]
+      },
+      "set": {
+        "REMIXER": [
+          "Panda Bear",
+          "Sonic Boom"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Panda Bear",
+          "Sonic Boom"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Panda Bear",
+          "Sonic Boom"
+        ],
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "REMIXER / TRACKARTIST / PERFORMER",
+          "rule": "Separate structured per-track Remix credits; replace title-derived composite names, preserve provider order",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_credits": [
+            {
+              "name": "Panda Bear",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 218809
+            },
+            {
+              "name": "Sonic Boom (2)",
+              "anv": "",
+              "role": "Remix",
+              "artist_id": 97498
+            }
+          ]
+        },
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "01-07 - Emotionally Clear - Ammonite Remix.flac",
+      "status": "ready",
+      "original_tags": {
+        "ALBUMARTIST": [
+          "David Holmes"
+        ],
+        "ARTISTSORT": [
+          "David Holmes"
+        ],
+        "DISCNUMBER": [
+          "1"
+        ],
+        "TRACKTOTAL": [
+          "7"
+        ],
+        "TRACKNUMBER": [
+          "7"
+        ],
+        "ISRC": [
+          "GBPVV2400030"
+        ],
+        "TOTALTRACKS": [
+          "7"
+        ],
+        "GENRE": [
+          "electronic",
+          "alternative"
+        ],
+        "TITLE": [
+          "Emotionally Clear - Ammonite Remix"
+        ],
+        "RELEASECOUNTRY": [
+          "GB"
+        ],
+        "DISCTOTAL": [
+          "1"
+        ],
+        "PERFORMER": [
+          "David Holmes",
+          "Raven Violet",
+          "Ammonite"
+        ],
+        "ALBUMARTISTSORT": [
+          "David Holmes"
+        ],
+        "TOTALDISCS": [
+          "1"
+        ],
+        "ALBUM": [
+          "Blind On A Galloping Horse (Remixes Vol. 2) [GB]"
+        ],
+        "BCFUNL_ITEM_KEY": [
+          "album1470311101"
+        ],
+        "COMMENT": [
+          "bcfunl 0.1.6 processed 2026-10-25"
+        ],
+        "BANDCAMP_URL": [
+          "https://david-holmes.bandcamp.com/album/david-holmes-ft-raven-violet-blind-on-a-galloping-horse-remixes-vol-2"
+        ],
+        "ARTIST": [
+          "David Holmes"
+        ],
+        "TRACKARTIST": [
+          "David Holmes",
+          "Raven Violet",
+          "Ammonite"
+        ],
+        "DATE": [
+          "2024"
+        ],
+        "REMIXER": [
+          "Ammonite"
+        ]
+      },
+      "set": {
+        "GENRE": [
+          "Electronic",
+          "Alternative",
+          "Synth-pop",
+          "Acid House",
+          "House",
+          "Progressive House"
+        ]
+      },
+      "remove": [],
+      "lookup_hints": {
+        "catalog": [],
+        "album_guests": [
+          "Raven Violet"
+        ],
+        "merchandise": []
+      },
+      "evidence": [
+        {
+          "field": "ARTIST / ALBUMARTIST / ARTISTSORT / ALBUMARTISTSORT / TRACKARTIST / PERFORMER",
+          "rule": "Stue explicitly requires David Holmes as primary and Raven Violet as second track artist and performer on this release. Guest propagation is caller policy, not independently established by Discogs track credits."
+        },
+        {
+          "field": "GENRE",
+          "rule": "Combine existing genres and verified Discogs genres/styles, normalize through existing VCW genre.dat map, deduplicate case insensitively in first-seen order. Acid House expands to Electronic, Acid House, House.",
+          "provider_url": "https://www.discogs.com/release/30152429-David-Holmes-Blind-On-A-Galloping-Horse-Remixes-Vol-2",
+          "provider_genres": [
+            "Electronic"
+          ],
+          "provider_styles": [
+            "Synth-pop",
+            "Acid House",
+            "Progressive House"
+          ]
+        }
+      ],
+      "unresolved": [
+        "Discogs has no structured remixer for this track. Existing Ammonite credit is retained from explicit source TITLE, without claiming a resolved provider artist identity."
+      ]
+    }
+  ]
+}
