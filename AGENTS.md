@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This workspace currently contains `bleep.com_cookies.txt` and environment-managed directories (`.agents/`, `.codex/`, `.aws/`, and `.git/`). No application source, tests, assets, or dependency manifests are present. Do not assume a language, framework, or runtime. Leave environment-managed directories untouched unless the task explicitly requires changes.
+This workspace currently contains cookie files `*.cookies.txt` and environment-managed directories (`.agents/`, `.codex/`, `.aws/`, and `.git/`). No application source, tests, assets, or dependency manifests are present. Do not assume a language, framework, or runtime. Leave environment-managed directories untouched unless the task explicitly requires changes.
 
 When adding application code, use a simple structure appropriate to the chosen language and document its entry point and supporting directories here.
 
@@ -31,7 +31,7 @@ Git history is unavailable in this workspace, so no established commit conventio
 
 ## Security & Configuration
 
-Treat `bleep.com_cookies.txt` as sensitive authentication material. Never print its contents, copy cookie values into documentation or tests, or include them in commits or pull requests. Use sanitized examples when explaining authentication configuration.
+Treat cookie files `*.cookies.txt` as sensitive authentication material. Never print its contents, copy cookie values into documentation or tests, or include them in commits or pull requests. Use sanitized examples when explaining authentication configuration.
 
 ## Current Application (2026-10-26)
 
