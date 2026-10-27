@@ -472,9 +472,8 @@ readback decodes explicit separators without applying transformations again.
 ## Tag sanitizing agent skill
 
 The standard skill package is [skills/tag-sanitize](skills/tag-sanitize/SKILL.md),
-with SKILL.md, agents/openai.yaml and supporting tag rules. tagskill.md remains a
-compatibility pointer. To install it for project discovery from the repository
-root in a session where .agents is writable:
+with SKILL.md, agents/openai.yaml and supporting tag rules. To install it for
+project discovery from the repository root in a session where .agents is writable:
 
 ```sh
 mkdir -p .agents/skills

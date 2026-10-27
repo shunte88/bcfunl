@@ -1094,3 +1094,11 @@ Stue changed the staging directory to /media/backup/bcfstage (previously
 /media/backup). Updated docs/TRUENAS.md, including all commands and default
 research-library path. Application remains ~/bcfunl and music remains
 /mnt/tankn4/F8NAS1/music/. No files moved or NAS tasks changed.
+
+## 2026-10-27: obsolete tag skill pointer removed
+
+Removed tagskill.md at Stue's request after confirming it was only a compatibility
+pointer. Maintained skill remains skills/tag-sanitize/SKILL.md with supporting
+rules and agent metadata. README now links only the maintained package. Earlier
+memory/status and review references describe historical trials and are preserved.
+No application code or skill rules changed.
