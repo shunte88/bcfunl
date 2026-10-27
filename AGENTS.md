@@ -45,3 +45,9 @@ outputs belong under <output>/resources/; never commit extracts or SQLite files.
 Validation commands: cargo test --offline; cargo fmt --check;
 cargo clippy --offline --all-targets -- -D warnings; cargo build --offline --release.
 README documents system dependencies and the sibling VCW build dependency.
+
+## Documentation Preferences
+
+Use `johnsmith` as the collection owner in all documentation, sample commands,
+and deployment guides. Do not use Stue's real collection username in examples,
+including personalized deployment documentation.

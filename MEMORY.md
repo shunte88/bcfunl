@@ -1102,3 +1102,58 @@ pointer. Maintained skill remains skills/tag-sanitize/SKILL.md with supporting
 rules and agent metadata. README now links only the maintained package. Earlier
 memory/status and review references describe historical trials and are preserved.
 No application code or skill rules changed.
+
+## 2026-10-27: sequential scheduled maintenance workflow
+
+Stue approved replacing separate acquisition and processing schedules with one
+sequential maintenance task. Added scripts/maintenance.sh OWNER STAGING MUSIC,
+deployed under ~/bcfunl/scripts/, with acquisition followed by process --clean.
+Processing still runs after acquisition failures; both exit statuses print and
+either failure returns nonzero (acquisition status takes priority if both fail).
+A flock lock covers the whole workflow; monthly resources use the same lock.
+README and docs/TRUENAS.md now show one daily 01:00 maintenance task plus monthly
+resources. README examples use johnsmith; personalized TrueNAS guide uses Stue's
+collection and supplied paths. Initial full runs may be long; shadowed collection
+maintenance skips completed work. No scheduled tasks installed or changed on NAS.
+Validation: sh -n plus scripts/test-maintenance.py with disposable stubs verified
+ordering, all four success/failure combinations and overlapping-run rejection.
+No Rust changes or rebuild. Wrapper adds flock/util-linux dependency; Python is
+test-only. Version remains v0.1.17. Memory/status historical separate schedules
+are superseded by this entry.
+
+## 2026-10-27: documentation preference and current handoff
+
+Lasting preference: use johnsmith as collection owner in ALL documentation,
+sample commands and deployment guides, including the TrueNAS guide. Do not use
+Stue's real collection username in examples. Recorded in project AGENTS.md.
+README.md and docs/TRUENAS.md checked: both use johnsmith; no real collection
+username remains in either. Historical session records remain unchanged.
+
+Current release binary: v0.1.17, built and validated with standalone --clean and
+--process --clean. Last Rust checks: 95 tests passed, one parent fixture ignored,
+fmt, strict all-target Clippy and offline optimized build passed. Later changes
+are documentation and the scheduled-maintenance wrapper, not Rust code.
+
+Current deployment guide: docs/TRUENAS.md for TrueNAS SCALE 25.10. Application
+and support data ~/bcfunl; staging /media/backup/bcfstage; music destination
+/mnt/tankn4/F8NAS1/music; default research library under staging/resources/.
+Prepared workflow script scripts/maintenance.sh takes OWNER STAGING MUSIC.
+It runs acquisition then processing with cleanup, even after acquisition failures;
+both statuses are reported and either failure returns nonzero. Workflow/resource
+jobs share flock; use one daily task, not independent acquisition/processing
+schedules. Proposed schedule: maintenance 01:00 daily, resources 04:00 day 5.
+Wrapper checked with sh -n and scripts/test-maintenance.py (ordering, failure
+combinations, overlap rejection); Python is test-only, flock is a wrapper runtime
+dependency. Completed work skips during maintenance of the shadowed collection.
+
+Removed obsolete PAYLOAD_REVIEW.md and tagskill.md at Stue's request. Maintained
+tag skill remains skills/tag-sanitize/SKILL.md. Historical reviews retain their
+original references. Standard skill installation still pending in read-only
+.agents; no runtime agent/MCP or provider JSON import has been added.
+
+No NAS tasks installed, no deployment or live cleanup performed. NAS update was
+running when paths were supplied. Next step after update: verify task-account
+home, utilities (including flock), binary/glibc compatibility, persistent storage
+and dataset permissions; then test a small process run before enabling cleanup.
+If appliance runtime is incomplete, use a Linux container/VM rather than modifying
+the appliance OS. Prepared commands are not an assertion of NAS readiness.

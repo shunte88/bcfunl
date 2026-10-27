@@ -1,6 +1,6 @@
-# Stue's TrueNAS SCALE 25.10 deployment
+# TrueNAS SCALE 25.10 deployment
 
-Deployment paths supplied by Stue:
+Deployment paths:
 
 | Content | Path |
 | --- | --- |
@@ -25,7 +25,7 @@ Run in the environment that will execute bcfunl:
 ```sh
 cd "$HOME/bcfunl" || exit 1
 ./bcfunl --version
-for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum; do
+for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum flock; do
     command -v "$tool" || printf '%s: MISSING\n' "$tool"
 done
 ldd ./bcfunl
@@ -55,7 +55,7 @@ just to install media tools. See TrueNAS
 Start without cleanup, using a small number of releases:
 
 ```sh
-cd "$HOME/bcfunl" && ./bcfunl --process --user stuarthunter \
+cd "$HOME/bcfunl" && ./bcfunl --process --user johnsmith \
   --output /media/backup/bcfstage --serverdir /mnt/tankn4/F8NAS1/music \
   --parallel 2 --count 2 --summary
 ```
@@ -77,28 +77,33 @@ The commands use `$HOME` for the selected account. Ensure the scheduler's `PATH`
 contains the utility locations reported by the runtime check. Application maps
 are loaded from `~/bcfunl/data/` because each command changes directory first.
 
-### Daily collection acquisition
+### Daily acquisition, processing, and cleanup
 
-Suggested schedule: **01:00 daily** (`0 1 * * *`).
+Copy the repository's `scripts/maintenance.sh` into `~/bcfunl/scripts/` alongside
+the installed application. It runs acquisition first, then processing with
+cleanup. Processing still runs after acquisition failures so completed downloads
+can be published. Both exit statuses are printed; either failure makes the
+workflow fail. The script uses `flock` (from `util-linux`) to prevent a second
+workflow starting before the first finishes.
+
+Suggested schedule: **01:00 daily** (`0 1 * * *`). Use this single task instead
+of separate acquisition and processing tasks:
 
 ```sh
-cd "$HOME/bcfunl" && ./bcfunl --user stuarthunter --output /media/backup/bcfstage --cookies "$HOME/bcfunl/bandcamp.cookies.txt" --parallel 2 --summary >> logs/download.log 2>&1
+sh "$HOME/bcfunl/scripts/maintenance.sh" johnsmith /media/backup/bcfstage /mnt/tankn4/F8NAS1/music
 ```
 
-### Hourly processing and cleanup
-
-Suggested schedule: **20 minutes past every hour** (`20 * * * *`).
-
-```sh
-cd "$HOME/bcfunl" && ./bcfunl --process --clean --user stuarthunter --output /media/backup/bcfstage --serverdir /mnt/tankn4/F8NAS1/music --parallel 2 --summary >> logs/process.log 2>&1
-```
+Once the collection is fully shadowed, this checks for new releases, processes
+new downloads, and cleans successful payloads in order. Completed work remains
+skipped. Increase the schedule frequency later if needed; no processing start
+time needs to be estimated.
 
 ### Monthly Discogs resource refresh
 
 Suggested schedule: **04:00 on the fifth day of each month** (`0 4 5 * *`).
 
 ```sh
-cd "$HOME/bcfunl" && ./bcfunl --resources --output /media/backup/bcfstage >> logs/resources.log 2>&1
+cd "$HOME/bcfunl" && flock -n .bcfunl-maintenance.lock ./bcfunl --resources --output /media/backup/bcfstage >> logs/resources.log 2>&1
 ```
 
 Only current-month snapshots are selected. Missing snapshots produce a failure;
@@ -108,11 +113,12 @@ extracts and a new SQLite library alongside the old one during rebuilding.
 
 ## Operational behavior
 
-Updated download/process/clean commands share the staging lock. A task that
-finds another running exits with an error; the next scheduled invocation retries.
-An initial large acquisition can therefore postpone hourly processing until it
-finishes. Cleanup runs after the workers finish, including successful releases
-from a partially failed processing run. Failed processing still returns failure.
+The workflow and resource task share a workflow lock, so scheduled invocations
+cannot overlap, including between acquisition and processing. Individual
+download/process/clean commands also retain the staging lock. A task that finds
+another running exits with an error; the next scheduled invocation retries.
+Cleanup runs after the workers finish, including successful releases from a
+partially failed processing run. Failed processing still returns failure.
 
 Review `logs/download.log`, `logs/process.log`, and `logs/resources.log`; arrange
 log rotation. Expired cookies require a fresh browser export. Keep `~/Downloads`

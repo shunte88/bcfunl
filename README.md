@@ -662,21 +662,30 @@ directory must contain `data/artistmap.yaml` and other runtime mapping files.
 Set `HOME` to a persistent writable directory when using parallel downloads;
 aria2c stages under its `Downloads` directory.
 
+Use `scripts/maintenance.sh` for one sequential acquisition → process-and-clean
+workflow. Place it under the installed application's `scripts/` directory, with
+`bcfunl`, `data/`, and private cookies in the application directory. The wrapper
+requires `flock` from `util-linux` in addition to the runtime tools above.
+Processing runs even after acquisition failures; both exit statuses are reported
+and either failure makes the workflow fail. Logs are written under `logs/`.
+
 These example cron entries run **inside a Linux VM/container with cron installed**.
-Replace `/opt/bcfunl`, `/staging`, `/music`, and the user with the actual paths.
-Create `/opt/bcfunl/logs` first. They are examples, not installed tasks:
+Replace `/opt/bcfunl`, `/staging`, and `/music` with the actual paths. They are
+examples, not installed tasks:
 
 ```cron
-# Daily acquisition; completed downloads remain skipped.
-0 1 * * * cd /opt/bcfunl && ./bcfunl --user johnsmith --output /staging --cookies /opt/bcfunl/bandcamp.cookies.txt --parallel 2 --summary >> /opt/bcfunl/logs/download.log 2>&1
-# Hourly processing followed by cleanup of successfully published payloads.
-15 * * * * cd /opt/bcfunl && ./bcfunl --process --clean --user johnsmith --output /staging --serverdir /music --parallel 2 --summary >> /opt/bcfunl/logs/process.log 2>&1
-# Refresh monthly research snapshots after the start of the month.
-0 4 5 * * cd /opt/bcfunl && ./bcfunl --resources --output /staging >> /opt/bcfunl/logs/resources.log 2>&1
+# One daily acquisition, processing, and cleanup workflow.
+0 1 * * * sh /opt/bcfunl/scripts/maintenance.sh johnsmith /staging /music
+# Monthly resources use the same workflow lock to prevent overlap.
+0 4 5 * * cd /opt/bcfunl && flock -n .bcfunl-maintenance.lock ./bcfunl --resources --output /staging >> logs/resources.log 2>&1
 ```
 
-The default genre library is `/staging/resources/library.sqlite3` in these
-examples. If acquisition runs past the processing time, the staging lock rejects
-that processing invocation; the next hourly run retries. No waiting queue is
-created. Runtime `PATH` must include the installed utilities. Cookie expiry can
-require a new browser export. Cron logs need periodic rotation.
+Create `/opt/bcfunl/logs` before the first resource task. The default genre
+library is `/staging/resources/library.sqlite3` in these examples. An overlapping
+workflow/resource invocation exits with an error; the next scheduled invocation
+retries. Once the collection is shadowed, completed downloads and publications
+skip, keeping maintenance runs focused on new releases. Runtime `PATH` must
+include the installed utilities. Cookie expiry can require a new browser export.
+Cron logs need periodic rotation. Validate the wrapper without live downloads
+using `sh -n scripts/maintenance.sh` and
+`python3 scripts/test-maintenance.py` (Python is only needed for this check).
