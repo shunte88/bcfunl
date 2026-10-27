@@ -111,13 +111,18 @@ stay `It's`, `I'm`, and `Don't`; surnames such as `O'Rourke` stay capitalized.
 `data/forceupper.txt` supplies canonical whole-word spellings such as `XX`, `DJ`,
 and `BP` for artist and title values. This list is embedded at build time.
 Original captured `release_title` text is retained; `sanitized_title` supplies
-clean names downstream. Known artist-prefixed hyphenated titles use the final
-` - ` segment, following `fixtitle.txt`. Trailing single-token bracketed catalog
-codes containing letters and digits move to uppercase `catalog_num`; dates,
+clean names downstream. Known artist prefixes are removed through the first
+following ` - ` separator; later title/subtitle hyphens remain intact. Leading
+`[AF015] Title` and trailing single-token bracketed catalog codes move to uppercase
+`catalog_num`. Bare colon prefixes such as `Hnrbox003: Title` require 2–12 ASCII
+letters, 3–8 digits, and at most three optional suffix letters. This is a catalog
+hint heuristic, not edition confirmation. Numeric colon titles, dates,
 common disc/volume/BPM markers and multi-word edition text remain in the title.
 Existing nonempty catalog metadata wins. Migration back-fills old rows once and
 corrects artist display without resetting download/processing history. Existing
-archives and published folders are not renamed by migration.
+archives and published folders are not renamed by migration. Already-populated
+`sanitized_title` values are refreshed on collection recapture; this change does
+not rewrite them automatically.
 
 To download up to eight releases at once:
 

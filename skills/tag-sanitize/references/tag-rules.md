@@ -122,8 +122,13 @@ list into the executable. Preserve contractions (It's, I'm, Don't) and surname
 apostrophes (O'Rourke, D'Angelo). Apply these rules before saving derived fields.
 Keep release_title as captured evidence and sanitized_title as the downstream
 album/download-name value. For known artist-prefixed hyphenated release text,
-use the last spaced-hyphen segment as in fixtitle.txt. Remove balanced outer
-quotes, collapse whitespace and trim trailing spaces. A trailing bracketed or
+remove the artist prefix through its first following spaced-hyphen separator,
+preserving later title/subtitle separators. Remove balanced outer
+quotes, collapse whitespace and trim trailing spaces. Extract leading `[catalog]`
+hints as well as trailing tokens. Bare `catalog: Title` prefixes require 2–12
+ASCII letters, 3–8 digits and up to three optional suffix letters; preserve
+numeric colon titles and reject empty remaining titles. Conflicting leading and
+trailing codes retain the leading text and use the trailing hint. A trailing bracketed or
 parenthesized single-token catalog containing letters and digits is extracted
 case insensitively and saved uppercase to catalog_num, without overwriting an
 existing real catalog. Preserve multiword editions, years, and common format,

@@ -277,6 +277,37 @@ pub fn artist_matches(filter: Option<&str>, artist: &str) -> bool {
             .contains(&artist_display(f).to_lowercase())
     })
 }
+fn catalog_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    token.len() <= 32
+        && token.chars().any(|c| c.is_ascii_alphabetic())
+        && token.chars().any(|c| c.is_ascii_digit())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-./".contains(c))
+        && !lower.ends_with("bpm")
+        && ![
+            "cd", "disc", "disk", "vol", "lp", "bpm", "dvd", "sacd", "mp3",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn colon_catalog(token: &str) -> bool {
+    // Bare prefixes need a stricter label-code shape than bracketed hints.
+    let letters = token.bytes().take_while(u8::is_ascii_alphabetic).count();
+    let digits = token[letters..]
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    let suffix = &token[letters + digits..];
+    catalog_token(token)
+        && (2..=12).contains(&letters)
+        && (3..=8).contains(&digits)
+        && suffix.len() <= 3
+        && suffix.bytes().all(|c| c.is_ascii_alphabetic())
+}
+
 pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
     let mut text = raw.trim();
     let prefix = artist.trim();
@@ -287,7 +318,7 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
         && text.get(prefix.len()..).is_some_and(|tail| {
             tail.starts_with(|c: char| c.is_whitespace() || c == '(' || c == ':')
         })
-        && let Some((_, tail)) = text.rsplit_once(" - ")
+        && let Some((_, tail)) = text[prefix.len()..].split_once(" - ")
     {
         text = tail.trim();
     }
@@ -298,23 +329,32 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
             && let Some(pos) = text.rfind(open)
         {
             let token = &text[pos + 1..text.len() - 1];
-            if token.len() <= 32
-                && token.chars().any(|c| c.is_ascii_alphabetic())
-                && token.chars().any(|c| c.is_ascii_digit())
-                && token
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-./".contains(c))
-                && !token.to_ascii_lowercase().ends_with("bpm")
-                && ![
-                    "cd", "disc", "disk", "vol", "lp", "bpm", "dvd", "sacd", "mp3",
-                ]
-                .iter()
-                .any(|s| token.to_ascii_lowercase().starts_with(s))
-            {
+            if catalog_token(token) && !text[..pos].trim().is_empty() {
                 catalog = Some(token.to_ascii_uppercase());
                 text = text[..pos].trim_end();
             }
         }
+    }
+    let leading = if text.starts_with('[') {
+        text.find(']')
+            .map(|end| (&text[1..end], text[end + 1..].trim(), false))
+    } else {
+        text.split_once(':')
+            .map(|(token, rest)| (token, rest.trim(), true))
+    };
+    if let Some((token, rest, bare)) = leading
+        && !rest.is_empty()
+        && if bare {
+            colon_catalog(token)
+        } else {
+            catalog_token(token)
+        }
+        && catalog
+            .as_ref()
+            .is_none_or(|existing| token.eq_ignore_ascii_case(existing))
+    {
+        catalog = Some(token.to_ascii_uppercase());
+        text = rest;
     }
     (
         title_display(text.trim_matches(['\'', '"', '‘', '’', '“', '”']).trim()),
@@ -325,6 +365,73 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn leading_catalogs_and_artist_prefixes_preserve_subtitles() {
+        for (raw, artist, expected, catalog) in [
+            (
+                "V\u{200b}/\u{200b}A - [Af005z] Voiceless Z",
+                "V\u{200b}/\u{200b}A",
+                "Voiceless Z",
+                "AF005Z",
+            ),
+            ("µ-Ziq - [Af015] D Funk EP", "µ-Ziq", "D Funk EP", "AF015"),
+            ("V/A - [Af005y] Voiceless Y", "V/A", "Voiceless Y", "AF005Y"),
+            (
+                "Brainwaltzera - [Af007] Outdives EP",
+                "Brainwaltzera",
+                "Outdives EP",
+                "AF007",
+            ),
+            (
+                "Morphology - [Af020] Collective Memory EP",
+                "Morphology",
+                "Collective Memory EP",
+                "AF020",
+            ),
+            (
+                "Various Artists - Hnrbox003: Upwards At 33 1/3 Degrees - Höga Nord Rekords Singles Collection Vol.3",
+                "Various Artists",
+                "Upwards At 33 1/3 Degrees - Höga Nord Rekords Singles Collection Vol.3",
+                "HNRBOX003",
+            ),
+            ("[af015] D Funk EP", "µ-Ziq", "D Funk EP", "AF015"),
+        ] {
+            assert_eq!(
+                title(raw, artist),
+                (expected.into(), Some(catalog.into())),
+                "{raw}"
+            );
+        }
+        for (raw, artist, expected) in [
+            ("Artist - Title - Subtitle", "Artist", "Title - Subtitle"),
+            ("Title - Subtitle", "Artist", "Title - Subtitle"),
+            ("AC - DC - Title - Subtitle", "AC - DC", "Title - Subtitle"),
+        ] {
+            assert_eq!(title(raw, artist), (expected.into(), None));
+        }
+        for raw in [
+            "1984: A Story",
+            "Chapter 003: A Story",
+            "Part1: A Story",
+            "[Deluxe] Title",
+            "[2026] Title",
+            "[CD1] Title",
+            "[AF015]",
+            "Hnrbox003:",
+            "µ003: Title",
+            "[AF015] Title [OTHER123]",
+        ] {
+            let (cleaned, catalog) = title(raw, "Artist");
+            if raw == "[AF015] Title [OTHER123]" {
+                assert_eq!(catalog.as_deref(), Some("OTHER123"));
+                assert!(cleaned.starts_with("[Af015]"));
+            } else {
+                assert_eq!(catalog, None, "{raw}");
+                assert!(!cleaned.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn contractions_acronyms_and_catalogs() {
         for (raw, expected) in [

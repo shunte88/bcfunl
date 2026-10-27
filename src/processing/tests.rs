@@ -1261,3 +1261,46 @@ fn process_and_clean_removes_only_successful_payload_and_keeps_history() {
     assert!(run(&args).is_err());
     assert!(published.is_file());
 }
+
+#[test]
+fn processing_leading_catalogs_preserve_album_subtitles_and_existing_catalogs() {
+    let r = release(PathBuf::from("unused.flac"));
+    for (album, expected_album, catalog) in [
+        ("[Af015] D Funk EP", "D Funk EP", "AF015"),
+        (
+            "Romy - Hnrbox003: Title - Subtitle",
+            "Title - Subtitle",
+            "HNRBOX003",
+        ),
+    ] {
+        for existing in [None, Some("CONFIRMED123")] {
+            let mut tags = sample();
+            tags.remove("CATALOGNUMBER");
+            if let Some(existing) = existing {
+                put(&mut tags, "CATALOGNUMBER", existing);
+            }
+            put(&mut tags, "ALBUM", album);
+            let mut tracks = vec![Track {
+                path: r.source.clone(),
+                tags,
+                duration: 0.15,
+            }];
+            let plan = prepare_tags(
+                &r,
+                &mut tracks,
+                &template::Template::new(template::DEFAULT).unwrap(),
+            )
+            .unwrap();
+            let expected_catalog = existing.unwrap_or(catalog);
+            assert_eq!(plan.catalog, expected_catalog);
+            let decorated = format!("{expected_album} [GB] [{expected_catalog}]");
+            assert_eq!(plan.album, expected_album);
+            assert_eq!(value(&tracks[0].tags, "ALBUM"), decorated);
+            assert_eq!(value(&tracks[0].tags, "CATALOGNUMBER"), expected_catalog);
+            assert_eq!(
+                plan.directory,
+                PathBuf::from(format!("Romy/{expected_album} [GB] [{expected_catalog}]"))
+            );
+        }
+    }
+}

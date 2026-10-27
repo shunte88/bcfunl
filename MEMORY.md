@@ -1157,3 +1157,49 @@ home, utilities (including flock), binary/glibc compatibility, persistent storag
 and dataset permissions; then test a small process run before enabling cleanup.
 If appliance runtime is incomplete, use a Linux container/VM rather than modifying
 the appliance OS. Prepared commands are not an assertion of NAS readiness.
+
+## 2026-10-27: leading catalog hints and preserved subtitles (v0.1.18)
+
+Stue supplied [AF005Z]/[AF015]/[AF005Y]/[AF007]/[AF020] leading-title catalogs
+and Hnrbox003: Upwards At 33 1/3 Degrees - Höga Nord Rekords Singles Collection
+Vol.3, then authorized sanitizer changes. Shared src/sanitizing.rs now extracts
+leading [catalog] hints using existing trailing-token checks. Bare catalog colon
+prefixes require 2–12 ASCII letters, 3–8 digits, up to three suffix letters.
+Numeric/date/format/edition prefixes and empty resulting titles are preserved.
+Conflicting leading/trailing codes retain leading text and use trailing hint.
+Known artist-prefix cleanup removes through the first separator AFTER the known
+artist, preserving Title - Subtitle and artists whose names contain spaced
+hyphens. Previous last-segment rule is superseded. Confirmed catalog metadata
+still wins. Original captured release_title remains untouched.
+
+All callers reuse the shared sanitizer: capture, NULL-title database backfill,
+and processing embedded album metadata. Already-populated sanitized_title rows
+are not bulk rewritten; collection recapture refreshes them. Existing archives
+and published folders are not renamed or retagged in place. README and maintained
+tag skill reference document updated rules and bare-prefix heuristic limits.
+
+97 tests passed, one parent fixture ignored. Regression cases cover all six
+supplied examples, numeric/ordinary colon titles, conflicting codes, empty titles,
+subtitle retention, spaced hyphens inside artist names, embedded album/catalog
+processing and precedence of existing confirmed catalogs. Formatting, strict
+Clippy and offline optimized build checked. No production data changed or NAS
+deployment performed. Local version v0.1.18.
+
+## Latest handoff: v0.1.18 saved
+
+Stue requested memory and status saved after accepting the catalog/title fixes.
+Current local release: bcfunl v0.1.18 (built 2026-10-27T21:24:18Z).
+Leading bracketed catalog hints and strict bare catalog-colon prefixes now extract
+to uppercase catalog_num; artist-prefix cleanup preserves title/subtitle hyphens.
+All six supplied examples have regression coverage. Confirmed catalogs retain
+precedence. Previously populated sanitized_title rows refresh on collection
+recapture, not through an automatic bulk rewrite. Published files remain intact.
+
+Final checks completed: 97 tests passed, one parent fixture ignored, cargo fmt
+--check, strict all-target offline Clippy, and optimized offline release build.
+README and skills/tag-sanitize/references/tag-rules.md reflect current policy.
+No production metadata/media changes, live cleanup or NAS deployment performed.
+Next step is Stue's acceptance test with the new binary; TrueNAS runtime and
+schedule installation remain unverified/pending. Use johnsmith in all example
+commands and documentation. Deployment paths and sequential maintenance workflow
+remain as documented in docs/TRUENAS.md. No further work started.
