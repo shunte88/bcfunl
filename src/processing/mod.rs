@@ -1,4 +1,5 @@
 //! Offline processing of owned downloads. Credit and native tag handling come from mcfunl.
+pub(crate) mod clean;
 mod credits;
 mod genres;
 mod tagging;
@@ -892,7 +893,7 @@ fn completed_here(path: &str, server: &Path, item_key: &str) -> bool {
 
 fn processing_rows(db: &Database, args: &Args) -> Result<Vec<crate::db::Row>> {
     let mut sql = String::from(
-        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),file_path,genre,country_iso,catalog_num,publish_date,release_url,process_date,processed_path FROM releases WHERE user=? AND download_date IS NOT NULL",
+        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),file_path,genre,country_iso,catalog_num,publish_date,release_url,process_date,processed_path,process_error FROM releases WHERE user=? AND download_date IS NOT NULL",
     );
     let mut values = vec![args.user.clone()];
     if let Some(artist) = &args.artist {
@@ -911,6 +912,26 @@ fn processing_rows(db: &Database, args: &Args) -> Result<Vec<crate::db::Row>> {
     db.query(&sql, &values.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
+pub(crate) struct StagingLock(File);
+impl Drop for StagingLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+pub(crate) fn staging_lock(input: &Path) -> Result<StagingLock> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let lock = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(input.join(".bcfunl-staging.lock"))?;
+    lock.try_lock()
+        .context("Another download, process, or clean job holds the staging directory lock")?;
+    Ok(StagingLock(lock))
+}
+
 pub fn run(args: &Args) -> Result<()> {
     crate::sanitizing::load_artist_map()?;
     let template = template::Template::new(args.template.as_deref().unwrap_or(template::DEFAULT))?;
@@ -918,6 +939,7 @@ pub fn run(args: &Args) -> Result<()> {
         .output
         .canonicalize()
         .context("Open existing --output staging directory")?;
+    let _staging_lock = staging_lock(&input)?;
     let db_path = input.join("collection.sqlite3");
     ensure!(
         db_path.is_file(),
@@ -1060,9 +1082,12 @@ pub fn run(args: &Args) -> Result<()> {
         );
     }
     shutdown::check()?;
+    if args.clean {
+        clean::completed(&db, args, &input)?;
+    }
     ensure!(
         failures == 0,
-        "{failures} releases failed processing; sources and existing server files retained"
+        "{failures} releases failed processing; failed sources and existing server files retained"
     );
     Ok(())
 }

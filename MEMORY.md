@@ -1038,3 +1038,59 @@ through the worker path. No production processing or remote deployment run.
 Start acceptance testing with --process --parallel 2; disk, CPU and temporary
 space may limit throughput. FIFO result collection can wait for an earlier
 slow job before refilling a slot, matching the existing download scheduler.
+
+## 2026-10-27: processed payload cleanup and TrueNAS preparation (v0.1.17)
+
+Stue requested standalone --clean and --process --clean for scheduled operation
+on TrueNAS. Added src/processing/clean.rs. Cleanup selects the same user/artist/
+purchase-date universe, requires process_date, no process_error/last_error and
+a matching published manifest with all files still present. Only recorded regular
+audio/ZIP payloads beneath <output>/<user>/ are removed. Symlink paths, shared
+recorded paths, unavailable publications and mismatched manifests retain sources
+and report a failure. Missing sources skip idempotently. No recursive directory
+removal. History, file_path, download/process dates, resources and server files
+remain intact. Manifest presence validation does not rehash decoded audio.
+Existing externally verified server folders without bcfunl manifests are retained.
+
+Combined mode cleans successful rows even if other processing attempts fail,
+then retains failure status; cancellation does not start cleanup. --count caps
+cleanup removals independently of processing attempts. Standalone --force and
+--parallel rejected. --resources conflicts with --clean. Shared staging lock
+coordinates updated download/process/clean binaries, and status checks use
+SQLite write transactions. Older binaries do not honor this new staging lock.
+Lock explicitly unlocks on drop to avoid transient inherited fork descriptors.
+
+95 tests passed, one parent fixture ignored; fmt, strict Clippy and optimized
+release build passed. Tests use disposable paths only and cover process+clean,
+failed-source preservation, missing/mismatched publication files, symlinks,
+user scope, shared payloads, history preservation, repeat cleanup and locking.
+README has clean examples, conservative deletion policy and TrueNAS Linux VM/
+container scheduling examples. Official TrueNAS cron/container docs consulted.
+
+No NAS deployment, installed scheduled tasks, appliance package changes or live
+cleanup performed. Asked Stue for TrueNAS edition/version and staging/music paths;
+answer pending. Need those before preparing actual deployment-specific tasks.
+Linux required by current renameat2 implementation; FreeBSD CORE needs Linux VM.
+Build in deployment environment if copied binary's glibc/architecture differs.
+Current executable v0.1.17. PAYLOAD_REVIEW.md and README reference were removed
+at Stue's request before this change.
+
+## 2026-10-27: TrueNAS deployment paths supplied
+
+Stue confirmed TrueNAS SCALE 25.10, staging /media/backup, published music
+/mnt/tankn4/F8NAS1/music/, and application/support data under ~/bcfunl. NAS
+update currently running. Prepared docs/TRUENAS.md with exact paths, runtime/
+permission checks and daily acquisition, hourly process+clean and monthly
+resources task commands. README links guide. Do not treat these as installed
+tasks. No remote NAS access/deployment/cleanup or appliance changes performed.
+Task account home path and native-vs-Linux-container/VM runtime still require
+verification after update. Host media utilities/glibc compatibility unverified;
+use Linux container/VM if host runtime is incomplete, rather than enabling apt
+on appliance. Source version stays v0.1.17 (documentation-only update).
+
+## 2026-10-27: TrueNAS staging path correction
+
+Stue changed the staging directory to /media/backup/bcfstage (previously
+/media/backup). Updated docs/TRUENAS.md, including all commands and default
+research-library path. Application remains ~/bcfunl and music remains
+/mnt/tankn4/F8NAS1/music/. No files moved or NAS tasks changed.

@@ -71,6 +71,7 @@ Options:
 | `--summary` | Download mode prints the run status table; processing prints attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish completed downloads offline. |
+| `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
 | `--serverdir` | Required library destination for processing. |
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
 | `--template` | Processing filename rule; defaults to the example below. |
@@ -603,3 +604,80 @@ Already published releases retain the existing skip/never-overwrite behavior.
 Use a fresh destination to test new fallback tagging; this command does not
 retag previously published server files in place. The source archives and VCW
 project remain unchanged.
+
+
+## Clean processed downloads
+
+Run cleanup alone without cookies or network access:
+
+```sh
+./target/release/bcfunl --clean --user stuarthunter --output /data/bcfstg
+```
+
+Or process and then clean successfully published releases in the same call:
+
+```sh
+./target/release/bcfunl --process --clean --user stuarthunter \
+  --output /data/bcfstg --serverdir /data/bcfinal --parallel 2 --summary
+```
+
+Cleanup requires a nonempty `process_date`, no processing/download error, and a
+matching `.bcfunl-release.json` with all listed published files still present.
+It removes only the recorded regular audio/ZIP payload below
+`<output>/<user>/`, rejects symlink paths and shared payload references, and
+leaves directories, SQLite history, resources, and published music intact.
+Already-removed sources are skipped. Existing publications without a matching
+bcfunl manifest are retained for review. Cleanup checks publication presence;
+it does not repeat decoded-audio verification from processing.
+
+Artist and purchase-date filters also apply to cleanup. `--count` caps removed
+payloads independently of the processing attempt limit. Standalone cleanup does
+not accept `--force` or `--parallel`; `--force` with processing never bypasses
+cleanup checks. When some releases fail processing, cleanup still handles the
+successful releases and the command retains its failure exit status. A signal
+stops work without starting cleanup. Removal is permanent; download and process
+completion history remains unchanged, so normal collection runs do not download
+the cleaned files again. Use a deliberate forced download if needed later.
+
+Download, process, and clean modes share a staging-directory lock; overlapping
+jobs using that staging directory fail immediately. All scheduled jobs must use
+the updated binary to participate in this lock.
+
+## TrueNAS scheduling
+
+For Stue's supplied deployment paths and prepared task commands, see the
+[TrueNAS deployment guide](docs/TRUENAS.md).
+
+bcfunl processing currently requires Linux (`renameat2` for atomic publication).
+For a Linux-based TrueNAS installation, run it in a Linux container or VM with
+staging and music datasets mounted persistently. For FreeBSD-based TrueNAS CORE,
+use a Linux VM. Install the runtime utilities inside that environment, rather
+than modifying the TrueNAS appliance OS. Build there if a copied executable's
+architecture or system-library versions differ.
+
+TrueNAS documents [containers and dataset access](https://www.truenas.com/docs/scale/containers/managingcontainers/)
+and [scheduled cron jobs](https://www.truenas.com/docs/scale/systemsettings/advanced/managecronjobs/).
+Choose a task account with read/write access to staging and the music destination,
+keep cookies readable only by that account, and use absolute paths. The working
+directory must contain `data/artistmap.yaml` and other runtime mapping files.
+Set `HOME` to a persistent writable directory when using parallel downloads;
+aria2c stages under its `Downloads` directory.
+
+These example cron entries run **inside a Linux VM/container with cron installed**.
+Replace `/opt/bcfunl`, `/staging`, `/music`, and the user with the actual paths.
+Create `/opt/bcfunl/logs` first. They are examples, not installed tasks:
+
+```cron
+# Daily acquisition; completed downloads remain skipped.
+0 1 * * * cd /opt/bcfunl && ./bcfunl --user stuarthunter --output /staging --cookies /opt/bcfunl/bandcamp.cookies.txt --parallel 2 --summary >> /opt/bcfunl/logs/download.log 2>&1
+# Hourly processing followed by cleanup of successfully published payloads.
+15 * * * * cd /opt/bcfunl && ./bcfunl --process --clean --user stuarthunter --output /staging --serverdir /music --parallel 2 --summary >> /opt/bcfunl/logs/process.log 2>&1
+# Refresh monthly research snapshots after the start of the month.
+0 4 5 * * cd /opt/bcfunl && ./bcfunl --resources --output /staging >> /opt/bcfunl/logs/resources.log 2>&1
+```
+
+The default genre library is `/staging/resources/library.sqlite3` in these
+examples. If acquisition runs past the processing time, the staging lock rejects
+that processing invocation; the next hourly run retries. No waiting queue is
+created. Runtime `PATH` must include the installed utilities. Cookie expiry can
+require a new browser export. Cron logs need periodic rotation.

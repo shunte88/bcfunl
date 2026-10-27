@@ -69,8 +69,11 @@ struct Args {
     /// Tag and publish completed downloads without network lookups
     #[arg(long)]
     process: bool,
+    /// Remove staged payloads only after successful verified publication
+    #[arg(long)]
+    clean: bool,
     /// Acquire/import current Discogs artists and masters snapshots into resources/library.sqlite3
-    #[arg(long, conflicts_with_all = ["process", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template"])]
+    #[arg(long, conflicts_with_all = ["process", "clean", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template"])]
     resources: bool,
     /// Import an existing Discogs artists XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
@@ -103,6 +106,10 @@ impl Args {
         ensure!(
             self.artist.as_ref().is_none_or(|a| !a.trim().is_empty()),
             "--artist must not be empty"
+        );
+        ensure!(
+            !self.clean || self.process || (self.parallel.is_none() && !self.force),
+            "Standalone --clean does not use --parallel or --force"
         );
         if let (Some(from), Some(to)) = (self.fromdt, self.todt) {
             ensure!(from <= to, "--fromdt must not be after --todt");
@@ -501,7 +508,11 @@ fn run(args: Args) -> Result<()> {
     if args.process {
         return processing::run(&args);
     }
+    if args.clean {
+        return processing::clean::run(&args);
+    }
     fs::create_dir_all(&args.output).context("Create output directory")?;
+    let _staging_lock = processing::staging_lock(&args.output)?;
     let db = Database::open(
         args.output
             .join("collection.sqlite3")

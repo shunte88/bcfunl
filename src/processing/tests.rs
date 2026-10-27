@@ -1212,3 +1212,52 @@ fn parallel_processing_preserves_count_history_skips_and_failure_isolation() {
         assert!(input.join(format!("release{index}.flac")).is_file());
     }
 }
+
+#[test]
+fn process_and_clean_removes_only_successful_payload_and_keeps_history() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    let artist = input.join("fixture/Romy");
+    let server = root.path().join("server");
+    fs::create_dir_all(&artist).unwrap();
+    let (_audio, source) = fixture("flac");
+    let payload = artist.join("proof.flac");
+    fs::copy(source, &payload).unwrap();
+    tagging::write(&payload, &sample()).unwrap();
+    let failed = artist.join("broken.zip");
+    fs::write(&failed, b"not an archive").unwrap();
+    let db = Database::open(input.join("collection.sqlite3").to_str().unwrap()).unwrap();
+    for (key, path) in [("album1", &payload), ("album2", &failed)] {
+        db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path) VALUES('fixture',?,'Romy','Proof','unused','complete',?)", &[key,path.to_str().unwrap()]).unwrap();
+    }
+    let mut args = Args::try_parse_from([
+        "bcfunl",
+        "--process",
+        "--clean",
+        "--parallel",
+        "2",
+        "--user",
+        "fixture",
+        "--output",
+        input.to_str().unwrap(),
+        "--serverdir",
+        server.to_str().unwrap(),
+    ])
+    .unwrap();
+    assert!(run(&args).is_err());
+    assert!(!payload.exists());
+    assert!(failed.exists());
+    let published = server.join("Romy/Proof [CAT01]/01-01 - Did I (Peaches Remix).flac");
+    assert!(published.is_file());
+    let rows = db.query("SELECT process_date,process_error,download_date,file_path FROM releases WHERE item_key='album1'", &[]).unwrap();
+    assert!(rows[0][0].is_some());
+    assert!(rows[0][1].is_none());
+    assert_eq!(rows[0][2].as_deref(), Some("complete"));
+    assert_eq!(rows[0][3].as_deref(), payload.to_str());
+    // Standalone cleanup is idempotent and does not retry failed processing.
+    super::clean::run(&args).unwrap();
+    args.count = Some(1);
+    // The already-published release still skips despite its removed source.
+    assert!(run(&args).is_err());
+    assert!(published.is_file());
+}
