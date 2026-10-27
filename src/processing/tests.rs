@@ -1080,6 +1080,8 @@ fn processing_missing_genres_publishes_verified_fallback_and_audit_without_promo
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--parallel",
+        "2",
         "--user",
         "fixture",
         "--output",
@@ -1117,4 +1119,96 @@ fn processing_missing_genres_publishes_verified_fallback_and_audit_without_promo
     let mut retry = args;
     retry.library = Some(input.join("missing.sqlite3"));
     assert!(run(&retry).is_err());
+}
+
+#[test]
+fn parallel_processing_preserves_count_history_skips_and_failure_isolation() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    let server = root.path().join("server");
+    fs::create_dir(&input).unwrap();
+    let (_audio, source) = fixture("flac");
+    let db = Database::open(input.join("collection.sqlite3").to_str().unwrap()).unwrap();
+    for index in 1..=3 {
+        let path = input.join(format!("release{index}.flac"));
+        fs::copy(&source, &path).unwrap();
+        let mut tags = sample();
+        put(&mut tags, "ALBUM", format!("Proof {index}"));
+        tagging::write(&path, &tags).unwrap();
+        db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path) VALUES('fixture',?,'Romy',?,'unused','complete',?)", &[&format!("album{index}"), &format!("Proof {index}"), path.to_str().unwrap()]).unwrap();
+    }
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path) VALUES('fixture','album4','Romy','Missing','unused','complete','missing.flac')", &[]).unwrap();
+    let mut args = Args::try_parse_from([
+        "bcfunl",
+        "--process",
+        "--parallel",
+        "2",
+        "--user",
+        "fixture",
+        "--output",
+        input.to_str().unwrap(),
+        "--serverdir",
+        server.to_str().unwrap(),
+        "--count",
+        "2",
+    ])
+    .unwrap();
+    run(&args).unwrap();
+    assert_eq!(
+        db.query(
+            "SELECT COUNT(*) FROM releases WHERE process_date IS NOT NULL",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("2")
+    );
+    assert_eq!(
+        db.query(
+            "SELECT COUNT(*) FROM releases WHERE process_error IS NOT NULL",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("0")
+    );
+    args.count = None;
+    assert!(run(&args).is_err());
+    assert_eq!(
+        db.query(
+            "SELECT COUNT(*) FROM releases WHERE process_date IS NOT NULL",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("3")
+    );
+    assert_eq!(
+        db.query(
+            "SELECT item_key FROM releases WHERE process_error IS NOT NULL",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("album4")
+    );
+    assert_eq!(
+        db.query(
+            "SELECT COUNT(*) FROM releases WHERE download_date='complete' AND attempts=0",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("4")
+    );
+    for index in 1..=3 {
+        assert!(
+            server
+                .join(format!(
+                    "Romy/Proof {index} [CAT01]/01-01 - Did I (Peaches Remix).flac"
+                ))
+                .is_file()
+        );
+        assert!(input.join(format!("release{index}.flac")).is_file());
+    }
 }

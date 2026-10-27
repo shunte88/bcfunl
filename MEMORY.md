@@ -1016,3 +1016,25 @@ local imports succeeded. Full provider/agent JSON import and VCW consumption
 of the catalog remain future work. Standard skill source is
 skills/tag-sanitize/; .agents/skills installation is still pending in a writable
 user session. Do not deploy, start bulk processing or modify VCW while paused.
+
+## 2026-10-27: parallel offline processing (v0.1.16)
+
+Stue requested processing parallelism. Reused --parallel 2..8 with --process;
+omitting it preserves one-release-at-a-time behavior. Scoped release workers
+use the existing bounded FIFO scheduling pattern from downloads. Main thread
+alone records SQLite history; each job opens its own read-only genre library
+connection. Server lock, isolated temporary trees, audio/tag verification and
+atomic no-replace publication remain intact. Count bounds scheduled attempts
+and completed releases still skip. Shutdown stops scheduling, joins workers,
+and records successful results before returning the termination error.
+
+README now documents concurrent processing, resource costs, and consolidated
+external utility installation (flac provides metaflac). No aria2c dependency
+for processing. Version bumped to v0.1.16. Validation: 92 tests passed, one
+parent fixture ignored; fmt, strict all-target Clippy and offline release build
+passed. Integration covers concurrent publications, count, retry skips,
+failure isolation and unchanged download history; fallback integration runs
+through the worker path. No production processing or remote deployment run.
+Start acceptance testing with --process --parallel 2; disk, CPU and temporary
+space may limit throughput. FIFO result collection can wait for an earlier
+slow job before refilling a slot, matching the existing download scheduler.

@@ -17,6 +17,38 @@ Builds reuse the sibling VCW checkout at `../vcw` (`vcw-metadata` and
 on another machine; the compiled executable does not need it at runtime.
 Export your logged-in **bandcamp.com** cookies in Netscape format.
 
+### External utilities
+
+All runtime utilities must be available on PATH for the relevant mode:
+
+| Utility | Purpose | Required for |
+| --- | --- | --- |
+| `aria2c` | Parallel transfers | Download mode with `--parallel` |
+| `7z` | Validate and extract release archives | Processing ZIP archives |
+| `ffprobe` | Inspect audio, tags, and artwork | `--process` |
+| `ffmpeg` | Verify decoded audio, extract artwork, and remux supported containers | `--process` |
+| `metaflac` | Read and write FLAC tags and artwork | Processing FLAC |
+| `gzip` | Stream and validate compressed XML extracts | `--resources` with gzip input |
+| `sha256sum` | Verify resource checksums | `--resources` |
+
+Install the complete runtime utility set on Ubuntu/Debian:
+
+```sh
+sudo apt update
+sudo apt install aria2 7zip ffmpeg flac gzip coreutils libsqlite3-0
+```
+
+The `flac` package provides `metaflac`, `ffmpeg` provides `ffprobe`, and
+`coreutils` provides `sha256sum`. Older distributions may provide `7z` through
+`p7zip-full` instead of `7zip`.
+
+Source builds additionally need Rust/Cargo, a system linker (provided by
+`build-essential`), `libsqlite3-dev`, and the sibling VCW checkout described
+above. The optional `sqlite3` package provides the command for manual database
+queries; bcfunl uses the SQLite library directly.
+
+### Build and launch
+
 ```sh
 cargo build --release
 ./target/release/bcfunl --user johnsmith --count 100 \
@@ -35,7 +67,7 @@ Options:
 | `--count` | Maximum eligible releases to attempt this run; omitted means all. Completed entries, collection preorders, and missing links do not consume the limit. |
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
 | `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
-| `--parallel` | Use aria2c for 2-8 simultaneous downloads, one connection per file. Omit for the existing sequential Rust downloader. |
+| `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with one connection per file; `--process` uses local workers. Omit for sequential work. |
 | `--summary` | Download mode prints the run status table; processing prints attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish completed downloads offline. |
@@ -156,8 +188,15 @@ cargo run --release -- --process --user johnsmith \
 `--serverdir` is required and must be a separate directory tree from `--output`.
 The example template is the default. Omit `--count` for all eligible completed
 downloads; `--fromdt` and `--todt` retain their inclusive purchase-date meaning.
-Processing runs sequentially; `--parallel` selects downloader behavior only and
-cannot be combined with `--process`. Cookies and network services are not used.
+Processing defaults to one release at a time. Add `--parallel 2` through
+`--parallel 8` for concurrent release processing; aria2c is not needed in this
+mode. Start with two workers because extraction and decoded-audio verification
+compete for disk bandwidth, CPU, and temporary space. SQLite history writes stay
+on the main thread, and each worker opens its own read-only genre library
+connection. The server lock and atomic no-overwrite publication remain in force.
+`--count` limits scheduled attempts after completed-release skips. On termination,
+workers are joined and successful publications are recorded before exit.
+Cookies and network services are not used.
 
 Templates support `artist` (primary album artist), `albumartist`, `album`,
 `country_iso`, `catalog_num`, `disc`, `track`, `title`, `trackartist`, `performer`,

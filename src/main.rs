@@ -53,8 +53,8 @@ struct Args {
     /// Maximum eligible releases to attempt; omit to process the collection
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     count: Option<u32>,
-    /// Use aria2c for 2-8 simultaneous downloads; omit for sequential Rust transfers
-    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=8), conflicts_with = "process")]
+    /// Run 2-8 downloads or release-processing jobs at once; omit for sequential work
+    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=8))]
     parallel: Option<u8>,
     #[arg(long, default_value = "downloads")]
     output: PathBuf,

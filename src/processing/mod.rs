@@ -285,6 +285,7 @@ fn base_album(text: &str) -> &str {
     }
     text
 }
+#[derive(Clone)]
 struct Release {
     key: String,
     artist: String,
@@ -944,8 +945,9 @@ pub fn run(args: &Args) -> Result<()> {
         .library
         .clone()
         .unwrap_or_else(|| input.join("resources/library.sqlite3"));
-    let library = if args.library.is_some() || library_path.exists() {
-        Some(genres::Library::open(&library_path)?)
+    let library_path = if args.library.is_some() || library_path.exists() {
+        genres::Library::open(&library_path)?;
+        Some(library_path)
     } else {
         None
     };
@@ -954,60 +956,104 @@ pub fn run(args: &Args) -> Result<()> {
     let mut failures = 0;
     let mut published = 0;
     let mut skipped = 0;
-    for row in rows {
-        shutdown::check()?;
-        if row[9].is_some()
-            && !args.force
-            && row[10]
-                .as_deref()
-                .is_some_and(|p| completed_here(p, &server, row[0].as_deref().unwrap_or_default()))
-        {
-            skipped += 1;
-            continue;
-        }
-        if args.count.is_some_and(|limit| attempted >= limit) {
-            break;
-        }
-        attempted += 1;
-        let get = |i: usize| row[i].clone().unwrap_or_default();
-        let release = Release {
-            key: get(0),
-            artist: get(1),
-            album: get(2),
-            source: PathBuf::from(get(3)),
-            genre: get(4),
-            country: get(5),
-            catalog: get(6),
-            publish: get(7),
-            url: get(8),
-        };
-        eprintln!(
-            "[{attempted}] Process {} - {}",
-            release.artist, release.album
-        );
-        match process_one(&release, &input, &server, &template, library.as_ref()) {
-            Ok((path, plan, exists)) => {
-                db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback) WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
-                if exists {
-                    skipped += 1;
-                    eprintln!("  Verified existing server release; skipped");
-                } else {
-                    published += 1;
-                    eprintln!("  Published {}", path.display());
+    let limit = usize::from(args.parallel.unwrap_or(1));
+    thread::scope(|scope| -> Result<()> {
+        let mut active = std::collections::VecDeque::new();
+        let mut record = |release: &Release,
+                          result: Result<(PathBuf, Plan, bool)>,
+                          skipped: &mut u32|
+         -> Result<()> {
+            match result {
+                Ok((path, plan, exists)) => {
+                    db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback) WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
+                    if exists {
+                        *skipped += 1;
+                        eprintln!("  Verified existing server release; skipped");
+                    } else {
+                        published += 1;
+                        eprintln!("  Published {}", path.display());
+                    }
+                }
+                Err(_) if shutdown::requested() => {}
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    eprintln!(
+                        "  Failed: {} - {}: {message}",
+                        release.artist, release.album
+                    );
+                    failures += 1;
+                    db.query(
+                        "UPDATE releases SET process_error=? WHERE user=? AND item_key=?",
+                        &[&message, &args.user, &release.key],
+                    )?;
                 }
             }
-            Err(error) if shutdown::requested() => return Err(error),
-            Err(error) => {
-                let message = format!("{error:#}");
-                eprintln!("  Failed: {message}");
-                failures += 1;
-                db.query(
-                    "UPDATE releases SET process_error=? WHERE user=? AND item_key=?",
-                    &[&message, &args.user, &release.key],
-                )?;
+            Ok(())
+        };
+        let input = &input;
+        let server = &server;
+        let template = &template;
+        let library_path = &library_path;
+        for row in rows {
+            if shutdown::requested() {
+                break;
+            }
+            if row[9].is_some()
+                && !args.force
+                && row[10].as_deref().is_some_and(|p| {
+                    completed_here(p, server, row[0].as_deref().unwrap_or_default())
+                })
+            {
+                skipped += 1;
+                continue;
+            }
+            if args.count.is_some_and(|limit| attempted >= limit) {
+                break;
+            }
+            attempted += 1;
+            let get = |i: usize| row[i].clone().unwrap_or_default();
+            let release = Release {
+                key: get(0),
+                artist: get(1),
+                album: get(2),
+                source: PathBuf::from(get(3)),
+                genre: get(4),
+                country: get(5),
+                catalog: get(6),
+                publish: get(7),
+                url: get(8),
+            };
+            eprintln!(
+                "[{attempted}] Process {} - {}",
+                release.artist, release.album
+            );
+            let worker_release = release.clone();
+            active.push_back((
+                release,
+                scope.spawn(move || {
+                    let library = library_path
+                        .as_deref()
+                        .map(genres::Library::open)
+                        .transpose()?;
+                    process_one(&worker_release, input, server, template, library.as_ref())
+                }),
+            ));
+            if active.len() == limit {
+                let (release, task) = active.pop_front().unwrap();
+                let result = task
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+                record(&release, result, &mut skipped)?;
             }
         }
-    }
+        for (release, task) in active {
+            let result = task
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+            record(&release, result, &mut skipped)?;
+        }
+        Ok(())
+    })?;
     if args.summary {
         println!(
             "Processing: {attempted} attempted, {published} published, {skipped} skipped, {failures} failed"
