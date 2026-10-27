@@ -301,7 +301,6 @@ is parsed without executing scripts. Returned pages are capped at 2 MiB and
 refreshed URLs must use approved Bandcamp/CDN origins. Both transfer modes
 support recovery. Rust HTTP requests and aria2c cookie loading honor cookie
 domains, paths, and expiry; Bandcamp cookies are not sent to bcbits.com.
-See [PAYLOAD_REVIEW.md](PAYLOAD_REVIEW.md) for the inspected HTML failure.
 
 The main collection is walked newest-first, using the collection page's
 `#pagedata` and the paginated collection endpoint. The separate hidden-items
