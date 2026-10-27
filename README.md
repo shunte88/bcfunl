@@ -611,13 +611,13 @@ project remain unchanged.
 Run cleanup alone without cookies or network access:
 
 ```sh
-./target/release/bcfunl --clean --user stuarthunter --output /data/bcfstg
+./target/release/bcfunl --clean --user johnsmith --output /data/bcfstg
 ```
 
 Or process and then clean successfully published releases in the same call:
 
 ```sh
-./target/release/bcfunl --process --clean --user stuarthunter \
+./target/release/bcfunl --process --clean --user johnsmith \
   --output /data/bcfstg --serverdir /data/bcfinal --parallel 2 --summary
 ```
 
@@ -669,9 +669,9 @@ Create `/opt/bcfunl/logs` first. They are examples, not installed tasks:
 
 ```cron
 # Daily acquisition; completed downloads remain skipped.
-0 1 * * * cd /opt/bcfunl && ./bcfunl --user stuarthunter --output /staging --cookies /opt/bcfunl/bandcamp.cookies.txt --parallel 2 --summary >> /opt/bcfunl/logs/download.log 2>&1
+0 1 * * * cd /opt/bcfunl && ./bcfunl --user johnsmith --output /staging --cookies /opt/bcfunl/bandcamp.cookies.txt --parallel 2 --summary >> /opt/bcfunl/logs/download.log 2>&1
 # Hourly processing followed by cleanup of successfully published payloads.
-15 * * * * cd /opt/bcfunl && ./bcfunl --process --clean --user stuarthunter --output /staging --serverdir /music --parallel 2 --summary >> /opt/bcfunl/logs/process.log 2>&1
+15 * * * * cd /opt/bcfunl && ./bcfunl --process --clean --user johnsmith --output /staging --serverdir /music --parallel 2 --summary >> /opt/bcfunl/logs/process.log 2>&1
 # Refresh monthly research snapshots after the start of the month.
 0 4 5 * * cd /opt/bcfunl && ./bcfunl --resources --output /staging >> /opt/bcfunl/logs/resources.log 2>&1
 ```
