@@ -308,6 +308,32 @@ fn colon_catalog(token: &str) -> bool {
         && suffix.bytes().all(|c| c.is_ascii_alphabetic())
 }
 
+fn ombra_catalog(value: &str) -> Option<(String, &str)> {
+    for prefix in ["ombra international", "ombra intl"] {
+        let Some(head) = value.get(..prefix.len()) else {
+            continue;
+        };
+        if !head.eq_ignore_ascii_case(prefix) {
+            continue;
+        }
+        let tail = value[prefix.len()..].trim_start();
+        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+        if !(1..=6).contains(&digits) {
+            continue;
+        }
+        let rest = &tail[digits..];
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace() && c != ':' && c != '-')
+        {
+            continue;
+        }
+        return Some((format!("OMBRA INTL {}", &tail[..digits]), rest));
+    }
+    None
+}
+
 pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
     let mut text = raw.trim();
     let prefix = artist.trim();
@@ -324,12 +350,41 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
     }
     text = text.trim_matches(['\'', '"', '‘', '’', '“', '”']).trim();
     let mut catalog = None;
+    if let Some((code, rest)) = ombra_catalog(text) {
+        let remaining = rest.trim().trim_start_matches([':', '-']).trim();
+        if remaining.is_empty() {
+            return (
+                format!(
+                    "Ombra International {}",
+                    code.strip_prefix("OMBRA INTL ").unwrap()
+                ),
+                Some(code),
+            );
+        }
+        catalog = Some(code);
+        text = remaining;
+    }
     for (open, close) in [('(', ')'), ('[', ']')] {
         if text.ends_with(close)
             && let Some(pos) = text.rfind(open)
         {
             let token = &text[pos + 1..text.len() - 1];
-            if catalog_token(token) && !text[..pos].trim().is_empty() {
+            if let Some((code, rest)) = ombra_catalog(token)
+                && rest.trim().is_empty()
+                && catalog.as_ref().is_none_or(|existing| existing == &code)
+            {
+                if text[..pos].trim().is_empty() {
+                    return (
+                        format!(
+                            "Ombra International {}",
+                            code.strip_prefix("OMBRA INTL ").unwrap()
+                        ),
+                        Some(code),
+                    );
+                }
+                catalog = Some(code);
+                text = text[..pos].trim_end();
+            } else if catalog_token(token) && !text[..pos].trim().is_empty() {
                 catalog = Some(token.to_ascii_uppercase());
                 text = text[..pos].trim_end();
             }
@@ -342,6 +397,14 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
         text.split_once(':')
             .map(|(token, rest)| (token, rest.trim(), true))
     };
+    if let Some((token, rest, false)) = leading
+        && let Some((code, tail)) = ombra_catalog(token)
+        && tail.trim().is_empty()
+        && !rest.is_empty()
+        && catalog.as_ref().is_none_or(|existing| existing == &code)
+    {
+        return (title_display(rest), Some(code));
+    }
     if let Some((token, rest, bare)) = leading
         && !rest.is_empty()
         && if bare {
@@ -365,6 +428,41 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ombra_catalog_titles_remain_meaningful_and_idempotent() {
+        for raw in [
+            "Ombra Intl 006",
+            "OMBRA INTL006",
+            "Ombra International 006",
+            "[Ombra INTL 006]",
+        ] {
+            let expected = (
+                "Ombra International 006".into(),
+                Some("OMBRA INTL 006".into()),
+            );
+            assert_eq!(title(raw, "Artist"), expected);
+            assert_eq!(title(&expected.0, "Artist"), expected);
+        }
+        for raw in [
+            "Ombra INTL022: Dilation & Truth",
+            "Dilation & Truth [Ombra INTL 022]",
+            "[Ombra INTL 022] Dilation & Truth",
+        ] {
+            assert_eq!(
+                title(raw, "Artist"),
+                ("Dilation & Truth".into(), Some("OMBRA INTL 022".into()))
+            );
+        }
+        for raw in [
+            "Ombra Intl Remix",
+            "Ombra Intl 006Remix",
+            "Ombra Intl 1234567",
+            "Other Ombra Intl 006",
+        ] {
+            assert_eq!(title(raw, "Artist").1, None);
+        }
+    }
+
     #[test]
     fn leading_catalogs_and_artist_prefixes_preserve_subtitles() {
         for (raw, artist, expected, catalog) in [

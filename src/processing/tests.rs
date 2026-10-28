@@ -1344,3 +1344,41 @@ fn only_past_single_file_releases_lose_explicit_prerelease_markers() {
         "Pre-Release Versions (Deluxe)"
     );
 }
+
+#[test]
+fn ombra_catalog_only_album_keeps_title_and_formats_country_and_catalog() {
+    let mut r = release(PathBuf::from("unused.flac"));
+    r.album = "Ombra Intl 006".into();
+    r.country = "DE".into();
+    for existing in [None, Some("CONFIRMED006")] {
+        let mut tags = sample();
+        put(&mut tags, "ALBUM", "Ombra Intl 006");
+        tags.remove("CATALOGNUMBER");
+        if let Some(code) = existing {
+            put(&mut tags, "CATALOGNUMBER", code);
+        }
+        let mut tracks = vec![Track {
+            path: r.source.clone(),
+            tags,
+            duration: 0.15,
+        }];
+        let plan = prepare_tags(
+            &r,
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+        )
+        .unwrap();
+        let code = existing.unwrap_or("OMBRA INTL 006");
+        assert_eq!(plan.album, "Ombra International 006");
+        assert_eq!(plan.catalog, code);
+        assert_eq!(
+            plan.directory,
+            PathBuf::from(format!("Romy/Ombra International 006 [DE] [{code}]"))
+        );
+        assert_eq!(
+            value(&tracks[0].tags, "ALBUM"),
+            format!("Ombra International 006 [DE] [{code}]")
+        );
+        assert_eq!(value(&tracks[0].tags, "CATALOGNUMBER"), code);
+    }
+}

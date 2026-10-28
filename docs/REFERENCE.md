@@ -679,3 +679,17 @@ include the installed utilities. Cookie expiry can require a new browser export.
 Cron logs need periodic rotation. Validate the wrapper without live downloads
 using `sh -n scripts/maintenance.sh` and
 `python3 scripts/test-maintenance.py` (Python is only needed for this check).
+
+### Ombra International catalog titles
+
+Recognize `Ombra INTL 006`, `Ombra INTL006`, and the expanded
+`Ombra International 006` case insensitively. Save the catalog hint as
+`OMBRA INTL 006`, preserving leading zeros. If the catalog designation is the
+entire title, retain it as `Ombra International 006`. If a separate title follows
+a colon/hyphen or accompanies a bracketed catalog, retain that title instead.
+Existing confirmed catalog metadata wins. Normal country/catalog template
+placeholders still apply, for example
+`Ombra International 006 [DE] [OMBRA INTL 006]` when country DE is already known.
+Do not infer country from this label rule. Original captured titles remain
+unchanged; existing saved titles refresh through collection recapture, and
+already-published files are not renamed automatically.

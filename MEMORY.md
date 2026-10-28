@@ -1343,3 +1343,32 @@ No authenticated live inspection/download of Opposites performed. Actual release
 metadata still needs user's acceptance test, and unknown single-track evidence
 remains conservatively excluded. No production cleanup/deployment started.
 Earlier blanket preorder rejection policy is superseded only by this exception.
+
+## 2026-10-28: Ombra International title/catalog rule (v0.1.23)
+
+User requested recognizing Ombra Intl numeric catalog titles, retaining the
+catalog designation if it is the entire title, expanding Intl to International,
+and allowing normal country/catalog template suffixes. Interpreted user typo
+Ibternational as International. Official label Bandcamp listing confirmed spaced
+and joined forms (Ombra INTL 006 / Ombra INTL021) and titles with subtitles.
+Source: https://ombrainternational.bandcamp.com/ .
+
+Shared sanitizer recognizes case-insensitive Ombra Intl / Ombra International
+prefix with 1–6 digits, preserving leading zeros. Catalog hint normalized as
+OMBRA INTL 006. Catalog-only titles become Ombra International 006, including
+bracketed-only designation; separate subtitles retain their wording while the
+catalog is extracted. Leading/trailing bracketed forms supported. Invalid,
+non-numeric and overlong codes are not inferred. Existing real catalog metadata
+wins. Country is taken only from existing metadata, never inferred by label.
+Default directory example with supplied country DE:
+Artist/Ombra International 006 [DE] [OMBRA INTL 006]. Reprocessing the expanded
+title is idempotent; original captured release_title remains evidence. Existing
+non-NULL sanitized titles refresh on capture, not bulk rewrite. Published media
+is not renamed or retagged automatically.
+
+Updated src/sanitizing.rs, focused sanitizer/processing tests, reference guide
+and tag skill rules. bcfunl v0.1.23 (built 2026-10-28T21:24:21Z). Full validation: 103 tests passed,
+one parent fixture ignored; formatting, strict all-target Clippy and optimized
+offline release build passed. Processing test checks preserved album name,
+country/catalog template suffixes, tag fields and confirmed-catalog precedence.
+No production files/history changed, no NAS deployment or live processing run.
