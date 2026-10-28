@@ -48,6 +48,8 @@ README documents system dependencies and the sibling VCW build dependency.
 
 ## Documentation Preferences
 
+Use US English spelling and do not use em dashes in documentation or replies.
+
 Use `johnsmith` as the collection owner in all documentation, sample commands,
 and deployment guides. Do not use Stue's real collection username in examples,
 including personalized deployment documentation.

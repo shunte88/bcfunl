@@ -49,18 +49,17 @@ pub fn check() -> Result<()> {
 
 fn command(dir: &Path) -> Command {
     let mut cmd = Command::new("aria2c");
-    // The Rust scheduler bounds releases; disable per-file splitting to bound total connections.
+    // The Rust scheduler bounds releases; aria2 bounds connections within each payload.
     cmd.args([
         "--no-conf=true",
         "--quiet=true",
         "--summary-interval=0",
-        "--max-concurrent-downloads=1",
-        "--max-connection-per-server=1",
-        "--split=1",
-        "--max-tries=1",
+        "--max-concurrent-downloads=16",
+        "--max-connection-per-server=16",
+        "--split=20",
         "--connect-timeout=30",
         "--timeout=90",
-        "--continue=false",
+        "--continue=true",
         "--allow-overwrite=false",
         "--auto-file-renaming=false",
         "--file-allocation=none",
@@ -317,12 +316,15 @@ mod tests {
         let command = command(Path::new("a directory"));
         let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
         for expected in [
-            "--split=1",
-            "--max-connection-per-server=1",
-            "--max-concurrent-downloads=1",
+            "--split=20",
+            "--max-connection-per-server=16",
+            "--max-concurrent-downloads=16",
             "--input-file=-",
             "--no-conf=true",
             "--load-cookies",
+            "--continue=true",
+            "--allow-overwrite=false",
+            "--auto-file-renaming=false",
         ] {
             assert!(args.contains(&expected));
         }

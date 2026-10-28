@@ -1203,3 +1203,104 @@ Next step is Stue's acceptance test with the new binary; TrueNAS runtime and
 schedule installation remain unverified/pending. Use johnsmith in all example
 commands and documentation. Deployment paths and sequential maintenance workflow
 remain as documented in docs/TRUENAS.md. No further work started.
+
+## 2026-10-28: aria2 settings aligned with nuascn (v0.1.19)
+
+Stue first requested split=10/concurrent=5/connections=5, then explicitly steered
+to nuascn argument settings. Final implementation supersedes the interim values:
+--split=20, --max-concurrent-downloads=16, --max-connection-per-server=16,
+--continue=true, --auto-file-renaming=true, --allow-overwrite=true, quiet and
+summary interval 0. Removed max-tries=1 to use aria2 default retries like nuascn.
+Retained bcfunl's private scoped cookie file/stdin signed URL, TLS validation,
+no-conf, timeouts, no preallocation and disabled torrent/metalink following.
+Each Rust worker still feeds one release URL to one aria2 process. With parallel8
+up to roughly128 connections to one download host; actual splitting depends on
+file size/range support. Resume/overwrite/rename apply only in fresh private
+staging, not published files; final save still obeys --force. Cross-run resume
+and nuascn's separate outer three-attempt loop were not added. Nuascn source
+unchanged. README documents final settings; command tests assert tuning and
+file-handling flags plus URL/cookie argument protections. Local version v0.1.19.
+No real Bandcamp speed benchmark, production download or NAS deployment run.
+
+## 2026-10-28: aria2 overwrite/renaming correction
+
+Stue explicitly requested no overwrite and no renaming. Final aria2 arguments
+use --allow-overwrite=false and --auto-file-renaming=false; command regression
+assertions and README updated. Resume remains true; split20/concurrent16/
+connections16 and default retry limit remain. This supersedes those two true
+flags in the earlier nuascn-alignment entry. Release remains v0.1.19, rebuilt
+with corrected flags. No production download or live speed test performed.
+
+## 2026-10-28: release v0.1.20 handoff
+
+Stue requested a release bump and memory/status save after correcting aria2 flags.
+Current binary: bcfunl v0.1.20 (built 2026-10-28T14:30:46Z).
+Cargo.toml and Cargo.lock updated; optimized offline release build passed and
+--version verified. No new behavior changes in this bump.
+
+Final aria2 settings: split20, max-concurrent-downloads16,
+max-connection-per-server16, continue=true, allow-overwrite=false,
+auto-file-renaming=false. Default aria2 retries restored. Each Rust worker still
+handles one release URL; --parallel8 can permit roughly128 connections to one
+host subject to size/range support. Signed URLs stay on stdin; scoped private
+cookies, TLS checks and final publication --force policy remain intact. Resume
+is limited to private staging; cross-run resume is not implemented.
+
+Prior full validation: 97 tests passed, one parent fixture ignored, formatting,
+strict all-target Clippy and optimized build passed. After disabling overwrite
+and renaming, focused command regression and rebuild passed. This version-only
+bump was rebuilt, without rerunning the full test suite. No live download speed
+benchmark, production cleanup or NAS deployment performed. Next step: Stue's
+acceptance test/deployment. All documentation examples use johnsmith. TrueNAS
+paths and sequential workflow remain in docs/TRUENAS.md. No further work started.
+
+## 2026-10-28: user-facing README rewrite
+
+User requested rewriting README using banesullivan/README guidance, then clarified
+no development wording or personal references and preserve project heading/art.
+README now leads with the original artwork/heading, highlights, overview, quick
+start and common workflows, followed by runtime installation, operating behavior,
+documentation links, feedback and license. No development/test section or named
+collection owner; all examples use johnsmith. Detailed existing behavior moved
+to docs/REFERENCE.md with fixed relative links and user-facing wording. Removed
+personal references from that guide as well. Fixed an inclusive November date
+example to end November30 and removed the incorrect example-user default claim.
+Artwork remains assets/bcfunl.png, original # bcfunl - The Bandcamp Funnel heading.
+
+Validation: 16 relative documentation links/anchors checked, balanced code fences,
+artwork existence, generic owner and README wording assertions passed. No runtime
+changes, rebuild or tests needed for documentation-only changes. Release remains
+v0.1.20. No deployment, live processing or cleanup performed. Source guidance:
+https://github.com/banesullivan/README and its TEMPLATE.md; applied structure
+without copying its prose. All earlier runtime/TrueNAS handoff facts unchanged.
+
+## 2026-10-28: release v0.1.21 saved
+
+User requested release bump after the README rewrite and style confirmation.
+Current binary: bcfunl v0.1.21 (built 2026-10-28T14:40:49Z).
+Cargo.toml/Cargo.lock updated; optimized offline release build passed and version
+output verified. This bump adds no runtime behavior beyond v0.1.20.
+
+README is now a concise user-facing entry point based on banesullivan/README
+structure. Original project heading and assets/bcfunl.png preserved. Detailed
+command/behavior documentation moved to docs/REFERENCE.md. No development/test
+section in README, no personal references in user guides, johnsmith used for all
+example collection owners. Relative links/anchors and code fences validated.
+US English and no em dashes explicitly recorded in project AGENTS.md and checked
+in README, docs/REFERENCE.md and docs/TRUENAS.md. Memory/status retain historical
+session details; current handoff supersedes older release numbers.
+
+Final aria2 settings remain split20/concurrent16/connections16, resume enabled,
+overwrite disabled, automatic renaming disabled, default aria2 retries. Final
+publication follows --force; processing never overwrites published releases.
+Prior full tests: 97 passed, one parent fixture ignored. Most recent runtime
+correction had focused command regression pass; documentation/version-only
+changes did not rerun the full suite. No live speed benchmark or NAS deployment.
+
+TrueNAS SCALE25.10 preparation unchanged: application ~/bcfunl, staging
+/media/backup/bcfstage, music /mnt/tankn4/F8NAS1/music. Sequential workflow script
+acquires then processes/cleans even after acquisition failures, with flock and
+both statuses reported. Prepared schedules are not installed tasks. Runtime
+compatibility, utility availability and dataset permissions remain unverified on
+NAS. No production download, processing or cleanup started. Next action is user
+acceptance/deployment testing with v0.1.21 when ready.
