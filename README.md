@@ -145,6 +145,7 @@ the runtime, install it in a Linux container or VM with persistent dataset mount
 
 - Keep the same `--output` directory to retain `collection.sqlite3` history. Treat cookies and databases containing signed links as private.
 - Completed work skips on repeat runs. Download `--force` can replace downloaded files; processing never overwrites an existing music-library release.
+- Preorders remain excluded, with a narrow exception for confirmed single-track releases dated strictly before today (UTC). Same-day and uncertain releases remain excluded.
 - Processing verifies decoded audio and tags before publication. Completed-publication skips and cleanup check the manifest and file presence rather than rehashing audio.
 - Download, process, and clean jobs sharing staging cannot overlap. The maintenance wrapper also locks its complete workflow.
 - Run from the application directory so `data/artistmap.yaml` loads. Mapping changes affect later invocations, not already-published files.

@@ -876,3 +876,31 @@ fn private_collection_purchases_remain_eligible_without_public_metadata() {
     assert_eq!(selected.len(), 1);
     assert!(!selected[0].private);
 }
+
+#[test]
+fn capture_only_admits_flagged_singles_with_strictly_past_dates() {
+    let root = tempdir();
+    let db = Database::open(root.join("collection.sqlite3").to_str().unwrap()).unwrap();
+    let (mut items, urls) = fixtures(4);
+    let today = Utc::now().date_naive();
+    for item in &mut items {
+        item["is_preorder"] = json!(true);
+        item["track_count"] = json!(1);
+    }
+    items[1]["release_date"] = json!(today.to_string());
+    items[2]["release_date"] = json!(today.succ_opt().unwrap().to_string());
+    items[3]["track_count"] = json!(2);
+    let mut selected = Vec::new();
+    capture_page(
+        &db,
+        &args(),
+        &items,
+        &urls,
+        &mut HashSet::new(),
+        &mut selected,
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].key, "album0");
+    fs::remove_dir_all(root).unwrap();
+}

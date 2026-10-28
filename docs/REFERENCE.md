@@ -323,8 +323,14 @@ completed releases do not increment it. Existing databases are migrated
 automatically; historical attempts start at zero because they were not recorded.
 
 Publication dates come from collection/download metadata, or the release page
-when needed. Unavailable dates remain SQL NULL. Explicit preorders and future
-publication dates are rejected. A preorder discovered on a download page counts
+when needed. Unavailable dates remain SQL NULL. Preorders and future
+publication dates are rejected, except confirmed single-track releases whose
+available date evidence is strictly before today (UTC). Same-day, future,
+unknown-date, conflicting-date and multi-track releases do not qualify. One
+`download_items` entry alone is not single-track evidence. The same exception
+applies to refreshed download links. For past single-file releases, processing
+removes explicit bracketed `(pre-release)`/`[pre-release]` markers from derived
+album and track titles while preserving the original captured release title. A preorder discovered on a download page counts
 as an attempted release but is not marked complete. Some releases can still
 have markup-only labels the current schema does not expose.
 

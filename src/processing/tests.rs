@@ -1304,3 +1304,43 @@ fn processing_leading_catalogs_preserve_album_subtitles_and_existing_catalogs() 
         }
     }
 }
+
+#[test]
+fn only_past_single_file_releases_lose_explicit_prerelease_markers() {
+    for (count, date, strip) in [
+        (1, "2023-01-01".to_owned(), true),
+        (1, chrono::Utc::now().date_naive().to_string(), false),
+        (1, String::new(), false),
+        (2, "2023-01-01".to_owned(), false),
+    ] {
+        let mut r = release(PathBuf::from("unused.flac"));
+        r.publish = date;
+        let mut tracks = Vec::new();
+        for n in 1..=count {
+            let mut tags = sample();
+            put(&mut tags, "ALBUM", "Opposites (PRE-RELEASE)");
+            put(&mut tags, "TITLE", "Opposites [Pre-Release]");
+            put(&mut tags, "TRACKNUMBER", n.to_string());
+            tracks.push(Track {
+                path: r.source.clone(),
+                tags,
+                duration: 0.15,
+            });
+        }
+        let plan = prepare_tags(
+            &r,
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plan.album.contains("Pre-Release"), !strip);
+        assert_eq!(
+            value(&tracks[0].tags, "TITLE").contains("Pre-Release"),
+            !strip
+        );
+    }
+    assert_eq!(
+        crate::sanitizing::remove_prerelease("Pre-Release Versions (Deluxe)"),
+        "Pre-Release Versions (Deluxe)"
+    );
+}

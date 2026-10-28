@@ -1,7 +1,7 @@
 # Project Status
 
 Updated: 2026-10-28 (America/New_York)
-Local release: **v0.1.21**, rebuilt with refreshed user documentation and confirmed style rules
+Local release: **v0.1.22**, strict past-date single-track preorder exception
 
 ## Current outcome
 
@@ -814,3 +814,42 @@ both statuses reported. Prepared schedules are not installed tasks. Runtime
 compatibility, utility availability and dataset permissions remain unverified on
 NAS. No production download, processing or cleanup started. Next action is user
 acceptance/deployment testing with v0.1.21 when ready.
+
+## 2026-10-28: stale preorder exception for released single tracks (v0.1.22)
+
+User reported Scuba + Distance - Opposites incorrectly rejected as preorder,
+although a single FLAC with an approximately three-year-old release date. User
+explicitly restricted exception to single-track releases dated STRICTLY BEFORE
+today, not <= today. Shared helpers now inspect type/track_count/num_tracks/
+trackinfo cardinality and available date fields. A lone download_items entry
+alone is not proof of one track. Explicit count >1 overrides single indicators.
+Flagged collection items require explicit single/past evidence to be selected;
+unknown flagged items remain excluded. Download preparation evaluates dates and
+cardinality before rejecting flags, including public-page metadata. Any known
+same-day/future date prevents the exception; missing dates/count remain denied.
+Future ordinary publication checks remain. Download format must be available.
+
+HTML link recovery uses the same strict rule and rechecks returned date/count
+conflicts. Prepared state retains confirmed past-single eligibility so a refresh
+without redundant metadata can use previous evidence. Original title/artist
+remain available for recovery identity matching. A stale flag is logged when
+ignored. Derived sanitized_title/download basename remove explicit bracketed
+pre-release/prerelease/pre release markers after validated exception; original
+captured release_title remains unchanged. Processing removes these same explicit
+markers from ALBUM/TITLE only for exactly one staged audio file and a known date
+strictly before today. Ordinary wording such as Pre-Release Versions remains.
+No global stripping or multi-file/same-day/missing-date marker cleanup.
+
+Changes: src/collection.rs, src/main.rs, src/download.rs, src/sanitizing.rs,
+src/processing/mod.rs and focused tests. No dependencies/schema additions.
+README, docs/REFERENCE.md and tag skill reference updated, US English/no em dash
+and johnsmith examples retained. bcfunl v0.1.22 (built 2026-10-28T17:21:26Z).
+101 tests passed, one parent fixture ignored; cargo fmt --check, strict offline
+all-target Clippy and optimized offline release build passed. Tests cover strict
+date boundary, conflicting dates, cardinality, capture, metadata parsing,
+refreshed links and single-file-only marker cleanup.
+
+No authenticated live inspection/download of Opposites performed. Actual release
+metadata still needs user's acceptance test, and unknown single-track evidence
+remains conservatively excluded. No production cleanup/deployment started.
+Earlier blanket preorder rejection policy is superseded only by this exception.

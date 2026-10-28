@@ -232,7 +232,7 @@ fn capture_page(
             break;
         }
         let key = item_key(item)?;
-        if !seen.insert(key.clone()) || flagged(item) {
+        if !seen.insert(key.clone()) {
             continue;
         }
         if !sanitizing::artist_matches(
@@ -260,6 +260,15 @@ fn capture_page(
                 "released",
             ],
         );
+        if flagged(item)
+            && !collection::released_single(
+                collection::single_track(item) == Some(true),
+                &collection::release_dates(item),
+                Utc::now().date_naive(),
+            )
+        {
+            continue;
+        }
         if !args.matches(purchase) || publish.is_some_and(|d| d > Utc::now().date_naive()) {
             continue;
         }

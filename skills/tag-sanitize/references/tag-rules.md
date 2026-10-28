@@ -171,3 +171,14 @@ affected track numbers in the handoff/evidence. The runtime stores provenance
 in BCFUNL_GENRE_SOURCE, release manifests and releases.genre_fallback rather
 than promoting the fallback into confirmed releases.genre. Do not borrow any
 other release fields. Preserve normal audio/tag verification and server skips.
+
+### Stale single-track prerelease markers
+
+For a release with exactly one staged audio file and a known publication date
+strictly before today (UTC), remove explicit bracketed `pre-release`, `prerelease`
+or `pre release` markers from derived ALBUM/TITLE values. Preserve ordinary title
+wording such as `Pre-Release Versions`. Do not remove markers for same-day,
+future, missing-date or multi-file releases. Preserve captured source evidence.
+Downloader eligibility additionally requires single-track metadata and no
+conflicting same-day/future date evidence before ignoring a preorder flag;
+one downloadable item alone does not prove single-track cardinality.

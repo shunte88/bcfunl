@@ -95,3 +95,86 @@ pub fn flagged(item: &Value) -> bool {
         _ => false,
     })
 }
+
+// One downloadable item is not proof that an album contains only one track.
+pub(crate) fn single_track(item: &Value) -> Option<bool> {
+    let mut counts = ["track_count", "num_tracks"]
+        .iter()
+        .filter_map(|key| {
+            item[*key]
+                .as_u64()
+                .or_else(|| item[*key].as_str()?.parse().ok())
+        })
+        .collect::<Vec<_>>();
+    if let Some(tracks) = item["trackinfo"].as_array() {
+        counts.push(tracks.len() as u64);
+    }
+    if counts.iter().any(|n| *n > 1) {
+        return Some(false);
+    }
+    if counts.contains(&1)
+        || ["item_type", "type", "tralbum_type"]
+            .iter()
+            .any(|key| matches!(item[*key].as_str(), Some("t" | "track")))
+    {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn release_dates(item: &Value) -> Vec<chrono::NaiveDate> {
+    [
+        "release_date",
+        "album_release_date",
+        "publish_date",
+        "released",
+    ]
+    .iter()
+    .filter_map(|key| crate::metadata_date(item, &[*key]))
+    .collect()
+}
+
+pub(crate) fn released_single(
+    single: bool,
+    dates: &[chrono::NaiveDate],
+    today: chrono::NaiveDate,
+) -> bool {
+    single && !dates.is_empty() && dates.iter().all(|date| *date < today)
+}
+
+#[cfg(test)]
+mod preorder_tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use serde_json::json;
+    #[test]
+    fn stale_preorder_requires_single_track_and_all_dates_strictly_past() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
+        let past = today.pred_opt().unwrap();
+        let future = today.succ_opt().unwrap();
+        assert!(released_single(true, &[past], today));
+        for dates in [
+            vec![],
+            vec![today],
+            vec![future],
+            vec![past, today],
+            vec![past, future],
+        ] {
+            assert!(!released_single(true, &dates, today));
+        }
+        assert!(!released_single(false, &[past], today));
+        assert_eq!(single_track(&json!({"type":"track"})), Some(true));
+        assert_eq!(single_track(&json!({"trackinfo":[{}]})), Some(true));
+        assert_eq!(single_track(&json!({"track_count":"1"})), Some(true));
+        assert_eq!(
+            single_track(&json!({"type":"track","track_count":2})),
+            Some(false)
+        );
+        assert_eq!(single_track(&json!({"download_items":[{}]})), None);
+        assert_eq!(single_track(&json!({"type":"album"})), None);
+        let dates =
+            release_dates(&json!({"release_date":"2026-10-27","album_release_date":"2026-10-29"}));
+        assert!(!released_single(true, &dates, today));
+    }
+}

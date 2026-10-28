@@ -537,3 +537,21 @@ mod conjunction_tests {
         assert!(parse_artist_map("a: [b]\nb: [a]").is_err());
     }
 }
+
+// Only callers with confirmed past single-track evidence may remove these labels.
+pub(crate) fn remove_prerelease(value: &str) -> String {
+    let mut text = value.to_owned();
+    for marker in [
+        "(pre-release)",
+        "[pre-release]",
+        "(prerelease)",
+        "[prerelease]",
+        "(pre release)",
+        "[pre release]",
+    ] {
+        while let Some(pos) = text.to_ascii_lowercase().find(marker) {
+            text.replace_range(pos..pos + marker.len(), "");
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}

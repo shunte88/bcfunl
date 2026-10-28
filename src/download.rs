@@ -125,7 +125,7 @@ fn safe_name(value: &str) -> String {
     }
 }
 
-fn release_metadata(html: &str) -> Result<(Option<NaiveDate>, bool)> {
+fn release_metadata(html: &str) -> Result<(Vec<NaiveDate>, bool, Option<bool>)> {
     let doc = Html::parse_document(html);
     let selector = Selector::parse("[data-tralbum]").unwrap();
     if let Some(blob) = doc
@@ -133,14 +133,22 @@ fn release_metadata(html: &str) -> Result<(Option<NaiveDate>, bool)> {
         .find_map(|e| e.value().attr("data-tralbum"))
     {
         let data: Value = serde_json::from_str(blob).context("Invalid release metadata")?;
-        let publish = metadata_date(&data, &["album_release_date", "release_date"])
-            .or_else(|| metadata_date(&data["current"], &["release_date", "publish_date"]));
+        let mut dates = crate::collection::release_dates(&data);
+        dates.extend(crate::collection::release_dates(&data["current"]));
         let preorder = flagged(&data)
             || flagged(&data["current"])
             || data["album_is_preorder"].as_bool().unwrap_or(false);
-        return Ok((publish, preorder));
+        let single = match (
+            crate::collection::single_track(&data),
+            crate::collection::single_track(&data["current"]),
+        ) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            _ => None,
+        };
+        return Ok((dates, preorder, single));
     }
-    Ok((None, false))
+    Ok((Vec::new(), false, None))
 }
 
 pub(crate) fn save(
@@ -324,7 +332,7 @@ pub fn prepare(
     db: &crate::db::Database,
 ) -> Result<Prepared> {
     let data = net.page(&release.url).context("Read download page")?;
-    ensure!(!flagged(&data), "Release is a preorder/prerelease");
+
     let items = data["download_items"]
         .as_array()
         .context("Missing download_items")?;
@@ -349,13 +357,23 @@ pub fn prepare(
             })
             .context("Cannot identify release on download page")?
     };
-    ensure!(!flagged(item), "Release is a preorder/prerelease");
+
     let mut publish = metadata_date(
         item,
         &["release_date", "album_release_date", "publish_date"],
     )
     .or_else(|| metadata_date(&data, &["release_date", "album_release_date"]))
     .or(release.publish);
+    let mut dates = crate::collection::release_dates(item);
+    dates.extend(crate::collection::release_dates(&data));
+    dates.extend(release.publish);
+    let mut preorder = flagged(&data) || flagged(item);
+    let single_evidence = [
+        crate::collection::single_track(item),
+        crate::collection::single_track(&data),
+    ];
+    let mut single = !single_evidence.contains(&Some(false))
+        && (single_evidence.contains(&Some(true)) || release.key.starts_with("track"));
     // Private purchases remain downloadable even when their public album page returns 404.
     if !release.private
         && let Some(url) = &release.release_url
@@ -365,31 +383,61 @@ pub fn prepare(
             .context("Fetch release metadata page")?
             .text()
             .context("Read release metadata page")?;
-        let (date, preorder) = release_metadata(&html)?;
-        ensure!(!preorder, "Release is a preorder/prerelease");
-        publish = publish.or(date);
+        let (page_dates, page_preorder, page_single) = release_metadata(&html)?;
+        preorder |= page_preorder;
+        if page_single == Some(false) {
+            single = false;
+        } else if page_single == Some(true) && !single_evidence.contains(&Some(false)) {
+            single = true;
+        }
+        publish = publish.or(page_dates.first().copied());
+        dates.extend(page_dates);
         crate::metadata::store(db, &args.user, &release.key, &html)?;
     }
     ensure!(
         publish.is_none_or(|d| d <= Utc::now().date_naive()),
         "Release publication date is in the future"
     );
+    let stale =
+        preorder && crate::collection::released_single(single, &dates, Utc::now().date_naive());
+    ensure!(!preorder || stale, "Release is a preorder/prerelease");
     let (format, url) = choose(&item["downloads"], args.format)?;
+    if stale {
+        let cleaned = crate::sanitizing::remove_prerelease(&release.title);
+        ensure!(
+            !cleaned.is_empty(),
+            "Missing title after removing stale prerelease marker"
+        );
+        db.query(
+            "UPDATE releases SET sanitized_title=? WHERE user=? AND item_key=?",
+            &[&cleaned, &args.user, &release.key],
+        )?;
+        eprintln!(
+            "  Ignoring stale preorder flag for a confirmed single-track release dated before today"
+        );
+    }
+
     let root = args
         .output
         .join(safe_name(&args.user))
         .join(safe_name(&release.artist));
-    let basename = format!(
-        "{} - {}",
-        safe_name(&release.title),
-        safe_name(&release.key)
-    );
+    let output_title = if stale {
+        crate::sanitizing::remove_prerelease(&release.title)
+    } else {
+        release.title.clone()
+    };
+    let basename = format!("{} - {}", safe_name(&output_title), safe_name(&release.key));
     Ok(Prepared {
         title: item["title"].as_str().unwrap_or(&release.title).into(),
         artist: item["artist"].as_str().unwrap_or(&release.artist).into(),
         url,
         format,
         publish,
+        released_single: crate::collection::released_single(
+            single,
+            &dates,
+            Utc::now().date_naive(),
+        ),
         root,
         basename,
     })
@@ -401,6 +449,7 @@ pub struct Prepared {
     artist: String,
     format: String,
     publish: Option<NaiveDate>,
+    released_single: bool,
     root: PathBuf,
     basename: String,
 }
@@ -413,6 +462,7 @@ impl Prepared {
             artist: "Artist".into(),
             format: "flac".into(),
             publish: None,
+            released_single: false,
             root,
             basename: "release".into(),
         }
@@ -457,10 +507,11 @@ fn refreshed_link(
     title: &str,
     artist: &str,
     preferred: Format,
+    previous: Option<(bool, NaiveDate)>,
 ) -> Result<(String, String)> {
     let data = crate::collection::pagedata(html)
         .context("Returned payload has no Bandcamp download links")?;
-    ensure!(!flagged(&data), "Returned page is a preorder/prerelease");
+
     let items = data["download_items"]
         .as_array()
         .context("Returned page has no download_items")?;
@@ -477,7 +528,25 @@ fn refreshed_link(
                 })
         })
         .context("Returned download page belongs to a different release")?;
-    ensure!(!flagged(item), "Returned page is a preorder/prerelease");
+    let evidence = [
+        crate::collection::single_track(item),
+        crate::collection::single_track(&data),
+    ];
+    let single = !evidence.contains(&Some(false))
+        && (evidence.contains(&Some(true)) || previous.is_some_and(|(single, _)| single));
+    let mut dates = crate::collection::release_dates(item);
+    dates.extend(crate::collection::release_dates(&data));
+    dates.extend(previous.map(|(_, date)| date));
+    let today = Utc::now().date_naive();
+    ensure!(
+        dates.iter().all(|date| *date <= today),
+        "Returned release publication date is in the future"
+    );
+    ensure!(
+        !(flagged(&data) || flagged(item))
+            || crate::collection::released_single(single, &dates, today),
+        "Returned page is a preorder/prerelease"
+    );
     let (format, url) = choose(&item["downloads"], preferred)?;
     ensure!(
         crate::net::allowed(&reqwest::Url::parse(&url)?, true),
@@ -487,7 +556,13 @@ fn refreshed_link(
 }
 impl Prepared {
     pub(crate) fn refresh(&mut self, net: &Network, html: &str, preferred: Format) -> Result<()> {
-        let (format, url) = refreshed_link(html, &self.title, &self.artist, preferred)?;
+        let (format, url) = refreshed_link(
+            html,
+            &self.title,
+            &self.artist,
+            preferred,
+            self.publish.map(|date| (self.released_single, date)),
+        )?;
         self.format = format;
         // Status lookup is helpful for stale links, but some purchased URLs work only directly.
         self.url = match resolve_download(net, url.clone()) {
@@ -732,21 +807,60 @@ mod tests {
         )
     }
     #[test]
+    fn recovery_accepts_only_old_confirmed_single_track_preorders() {
+        let today = Utc::now().date_naive();
+        let past = today.pred_opt().unwrap();
+        for (single, date, expected) in [
+            (true, past, true),
+            (true, today, false),
+            (false, past, false),
+        ] {
+            let data = json!({"is_preorder":true,"download_items":[{"title":"Title","artist":"Artist","downloads":{"flac":{"url":"https://popplers5.bandcamp.com/download/track?fixture"}}}]});
+            let html = format!("<div id='pagedata' data-blob='{data}'></div>");
+            assert_eq!(
+                refreshed_link(&html, "Title", "Artist", Format::Flac, Some((single, date)))
+                    .is_ok(),
+                expected
+            );
+        }
+        let data = json!({"is_preorder":true,"release_date":today.to_string(),"download_items":[{"type":"track","title":"Title","artist":"Artist","downloads":{"flac":{"url":"https://popplers5.bandcamp.com/download/track?fixture"}}}]});
+        let html = format!("<div id='pagedata' data-blob='{data}'></div>");
+        assert!(
+            refreshed_link(&html, "Title", "Artist", Format::Flac, Some((true, past))).is_err()
+        );
+        let html = "<script data-tralbum='{&quot;album_release_date&quot;:&quot;2023-01-01&quot;,&quot;is_preorder&quot;:true,&quot;trackinfo&quot;:[{}]}'></script>";
+        let (dates, preorder, single) = release_metadata(html).unwrap();
+        assert!(preorder);
+        assert!(crate::collection::released_single(
+            single == Some(true),
+            &dates,
+            today
+        ));
+    }
+
+    #[test]
     fn html_link_recovery_validates_identity_and_origin() {
         let html = recovery_page(
             "Title",
             "Artist",
             "https://popplers5.bandcamp.com/download/album?sig=fixture&enc=flac",
         );
-        let (format, url) = refreshed_link(&html, "Title", "Artist", Format::Flac).unwrap();
+        let (format, url) = refreshed_link(&html, "Title", "Artist", Format::Flac, None).unwrap();
         assert_eq!(format, "flac");
         assert!(url.ends_with("sig=fixture&enc=flac"));
-        assert!(refreshed_link(&html, "Other Title", "Artist", Format::Flac).is_err());
-        assert!(refreshed_link(&html, "Title", "Other Artist", Format::Flac).is_err());
+        assert!(refreshed_link(&html, "Other Title", "Artist", Format::Flac, None).is_err());
+        assert!(refreshed_link(&html, "Title", "Other Artist", Format::Flac, None).is_err());
         let html = recovery_page("Title", "Artist", "https://example.com/private");
-        assert!(refreshed_link(&html, "Title", "Artist", Format::Flac).is_err());
+        assert!(refreshed_link(&html, "Title", "Artist", Format::Flac, None).is_err());
         assert!(
-            refreshed_link("<html>verification</html>", "Title", "Artist", Format::Flac).is_err()
+            refreshed_link(
+                "<html>verification</html>",
+                "Title",
+                "Artist",
+                Format::Flac,
+                None
+            )
+            .is_err()
         );
         assert!(read_html(std::io::repeat(b'x').take(HTML_LIMIT + 1)).is_err());
     }
@@ -774,7 +888,7 @@ mod tests {
             |prepared, html| {
                 refreshes += 1;
                 let (format, url) =
-                    refreshed_link(html, &prepared.title, &prepared.artist, Format::Flac)?;
+                    refreshed_link(html, &prepared.title, &prepared.artist, Format::Flac, None)?;
                 prepared.format = format;
                 prepared.url = url;
                 Ok(())
@@ -812,8 +926,9 @@ mod tests {
         assert!(!safe_name("../a/b\\c").contains('/'));
         assert_eq!(safe_name(".."), "untitled");
         let html = "<script data-tralbum='{&quot;album_release_date&quot;:&quot;01 Oct 2025 00:00:00 GMT&quot;,&quot;current&quot;:{&quot;is_preorder&quot;:true}}'></script>";
-        let (date, preorder) = release_metadata(html).unwrap();
-        assert_eq!(date.unwrap().to_string(), "2025-10-01");
+        let (dates, preorder, single) = release_metadata(html).unwrap();
+        assert_eq!(dates[0].to_string(), "2025-10-01");
+        assert_eq!(single, None);
         assert!(preorder);
     }
     #[test]

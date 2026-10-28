@@ -359,9 +359,25 @@ fn prepare_tags(
         .map(|names| names[0].clone())
         .unwrap_or_else(|| crate::initcap(&artist));
     ensure!(!artist.is_empty(), "Missing album artist; requires review");
+    let released_single = tracks.len() == 1
+        && chrono::NaiveDate::parse_from_str(&release.publish, "%Y-%m-%d")
+            .is_ok_and(|date| date < chrono::Utc::now().date_naive());
+    if released_single {
+        for tag in ["ALBUM", "TITLE"] {
+            if let Some(values) = tracks[0].tags.get_mut(tag) {
+                for value in values {
+                    *value = crate::sanitizing::remove_prerelease(value);
+                }
+            }
+        }
+    }
     let source_album = common(tracks, "ALBUM")?;
     let mut album = if source_album.is_empty() {
-        release.album.clone()
+        if released_single {
+            crate::sanitizing::remove_prerelease(&release.album)
+        } else {
+            release.album.clone()
+        }
     } else {
         source_album
     };
