@@ -1,7 +1,7 @@
 # Project Status
 
 Updated: 2026-10-30 (America/New_York)
-Local release: **v0.1.25**, shared-drive processing scan and publication fixes
+Local release: **v0.1.26**, processing timings/local extraction, scoped cleanup, NAS Compose and push-build configuration
 
 ## Current outcome
 
@@ -1008,3 +1008,107 @@ Actual share publication test remains pending. Do not claim verified NAS support
 from mount identification alone. ENOENT scan race and genuine duplicate/audio
 mismatch reviews remain as described in prior entry. No code/deployment changes
 or live processing performed while recording this information.
+
+## 2026-10-30: processing performance, NAS-local Compose, push builds (v0.1.26)
+
+User's limited MONO - OATH run failed with old EINVAL wording, with/without clean;
+combined cleanup unexpectedly examined583 older successes. Exact script used
+/data2/bcfunl/target/release/bcfunl, staging /data/bcfstag3, NFS client music
+/mnt/FN042018/F8NAS1/music. User then confirmed executable v0.1.24, so the v0.1.25
+NFS fallback had not been tested. No new evidence that fallback failed. Main
+batch not interrupted or modified.
+
+Found and fixed count check occurring after costly completion checks, allowing
+NAS history scans after reaching --count. Now stops before additional checks.
+ZIP extraction moved from server filesystem to local --output; prepared output
+still resides under --serverdir for final publication. --timings (requires
+--process) reports setup/query, history skip checks, per-release source/extract/
+read_tags/prepare/verify_existing/genre/copy_tag_verify/artwork/manifest_sync/
+publish/temp_cleanup/total, plus cleanup. Error stages retain timings. PCM decode
+errors now include path, distinguishing source vs server corruption. Combined
+process+clean now restricts cleanup to attempted release keys, not all filtered
+history; standalone clean remains historical. Processing+cleanup failures retain
+both errors. No verification weakening. Regression covers limited cleanup scope.
+
+Read-only local NAS name listing:6235 root entries in0.024sec; not a per-file
+metadata/decode benchmark. Disposable0.2sec FLAC profiling smoke tagged/published
+with PCM/tag verification and all timings; about0.566sec total,0.408sec copy/tag/
+verify in this tiny local case. Not an NFS speed benchmark. Real timing evidence
+from user's workload still pending. Recommend --parallel2 initial comparison;
+NAS-local execution removes NFS transport but not decode/verification costs.
+
+User specified container runs ON NAS: final staging /mnt/backup; landing/music
+/mnt/tankn4/music. These supersede earlier NAS paths in current guides/defaults.
+Added Dockerfile (Rust slim-trixie builder, Debian trixie runtime), compose.yaml,
+.env.example, strict .dockerignore and docs/CONTAINERS.md. Runtime installs all
+utilities including sqlite3 for migration. Named build context ../vcw copies only
+workspace manifest/metadata/types crates and license; no VCW source edits or
+private cookies/databases copied into image. Runtime uses configured UID/GID,
+read-only cookie/map mounts, persistent container-state HOME/Downloads/logs/
+workflow lock; bind mounts use identical NAS host/container paths and refuse to
+create missing datasets. Default command is help; jobs explicitly run via
+compose run, with sequential maintenance wrapper supported.
+
+User preferred SQL path updates rather than aliases. Added transactional,
+idempotent scripts/migrate-nas-paths.sql: file_path /data/bcfstag3/ -> /mnt/backup/;
+processed_path /mnt/FN042018/F8NAS1/music/ -> /mnt/tankn4/music/. Only anchored
+prefixes change, history intact, prints changed counts. Stop jobs, copy payloads
+and consistent database, make backup, then migrate. NOT run on real data.
+Optional alias env settings removed in favor of simple identical bind paths.
+scripts/test-migration.py verifies boundaries, NULLs, idempotence and history.
+
+Added .github/workflows/build.yml on every push/manual dispatch, no version gate.
+Checks out current repo + shunte88/vcw, optional read-only VCW_READ_TOKEN needed
+if private, optional VCW_REF defaults main. Native Linux x64/macOS ARM64/Windows
+x64 packages include maps/assets/skill/docs/licenses/migration/wrapper in tar.gz
+to preserve execute bits. Linux job tests pipeline AND builds/runs container/tool
+check. Native macOS processing uses reservation fallback; Windows natively supports
+downloads/resources only, processing+clean explicitly point to Linux Docker.
+Asked user's full-vs-initial Windows scope asynchronously, no reply; communicated
+this initial limitation rather than claiming full native Windows processing.
+Portability changes isolate staging lock in src/staging.rs, cfg Linux renameat2,
+portable temporary dirs, conservative Windows stale aria staging cleanup (no
+removal without live-PID check), HOME/USERPROFILE fallback. Windows source module
+provides explicit unsupported processing/clean errors; no silent behavior change.
+Hosted jobs use SQLite apt/brew/vcpkg setup and stable Rust with locked deps.
+
+Local gates:109 tests passed, one parent fixture ignored; fmt, strict all-target
+Clippy, optimized release build, shell syntax/wrapper tests, migration tests,
+Compose config, workflow YAML/triggers/matrix, docs/link/style checks passed.
+Minimal isolated Docker source context resolved with locked Cargo metadata.
+Docker daemon socket access is denied here, so image build/run NOT exercised
+locally; CI job is prepared to gate it on push. macOS/Windows hosted builds have
+NOT run; native platform/runtime validation remains pending. Workflow NOT pushed
+or installed remotely. No production NAS modification/download/processing/clean.
+bcfunl v0.1.26 (built 2026-10-30T15:50:38Z). Release bumped at user's request after available local gates.
+Public docs use johnsmith, US English, no em dashes, no personal references.
+Next: user builds Compose on NAS or pushes workflow, supplies --timings output
+for an actual workload; do not call remote/image gates green before execution.
+
+## 2026-10-30: GHCR image publication alongside native builds
+
+User requested providing a Docker image with the OS builds. Extended existing
+push/manual workflow with publish-image job gated by the entire native build
+matrix. Separate job alone receives packages:write; repository default token
+permissions remain contents:read. Builds and smoke-tests publication image,
+logs into ghcr.io using ephemeral GITHUB_TOKEN via password-stdin, pushes
+sha-<full SHA> under lowercased github.repository. Only default-branch runs move
+latest. Per-ref concurrency cancels superseded publication runs. OCI source and
+revision labels retained. All pushes eligible, no version/release gate. Native
+matrix failure prevents publication. Initial image Linux amd64, matching x64NAS.
+Optional private VCW checkout token requirement unchanged.
+
+Compose image now accepts BCFUNL_IMAGE override, default bcfunl:local. .env.example,
+docs/CONTAINERS.md and README explain pulling published image instead of building
+on NAS, private package read access/public visibility, and commit/digest pins.
+VCW source not needed on NAS when pulling. Package visibility not automatically
+changed; no Docker Hub credentials required. No actual registry push/deployment
+performed in this environment. GitHub workflow execution still pending.
+
+Validated workflow YAML, all-build dependency, scoped package permissions,
+verification-before-push ordering, default-only latest guard, Compose local and
+registry-image configurations. Mocked shell tests verify both default and feature
+branches publish commit tag, only default publishes latest. No Rust/runtime
+changes; release remains v0.1.26. Docker daemon inaccessible here, actual image
+build/run/push and macOS/Windows hosted gates remain unverified until user push.
+Memory/status saved. No production files/history or active jobs touched.

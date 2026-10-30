@@ -21,11 +21,15 @@ pub fn tempdir() -> io::Result<TempDir> {
     tempdir_in(&std::env::temp_dir())
 }
 pub fn tempdir_in(parent: &Path) -> io::Result<TempDir> {
+    #[cfg(unix)]
     use std::os::unix::fs::DirBuilderExt;
     for _ in 0..100 {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let p = parent.join(format!(".bcfunl-process-{}-{n}", std::process::id()));
-        match fs::DirBuilder::new().mode(0o700).create(&p) {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&p) {
             Ok(()) => return Ok(TempDir(p)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),

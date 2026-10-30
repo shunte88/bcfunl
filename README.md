@@ -72,7 +72,9 @@ See [format selection](docs/REFERENCE.md#format-and-files) for fallback rules.
 ```
 
 Either date bound can be supplied alone. Dates are inclusive **purchase dates**.
-Artist/date filters and `--count` also work with processing and cleanup.
+Artist/date filters and `--count` also work with processing and cleanup. Add
+`--timings` to processing commands to see where extraction, verification,
+tagging, and publication time is spent.
 
 ### Fill missing genres
 
@@ -114,8 +116,13 @@ refresh commands.
 
 ## Installation
 
-Processing requires **Linux**, a system SQLite library, and the utilities for
-the selected workflow. A compatible prebuilt executable needs neither Rust nor
+For a Linux container with all runtime utilities included, see
+[Docker Compose on the NAS](docs/CONTAINERS.md), including published images
+from successful push builds.
+
+Native processing targets **Linux and macOS**. Native Windows supports downloads
+and resources; use the Linux container for processing and cleanup. All native
+binaries need a system SQLite library and the utilities for the selected workflow. A compatible prebuilt executable needs neither Rust nor
 the sibling VCW source checkout at runtime.
 
 | Utility | Used for |
@@ -158,6 +165,7 @@ the runtime, install it in a Linux container or VM with persistent dataset mount
 | [Processing and templates](docs/REFERENCE.md#process-downloaded-releases) | Tagging, verification, naming, and existing-library skips |
 | [Artist transformations](docs/REFERENCE.md#artist-transformations) | Canonical names, collaborations, and track-credit rules |
 | [Discogs resources](docs/REFERENCE.md#monthly-discogs-research-resources) | Imports, database schema, and genre evidence |
+| [Containers and push builds](docs/CONTAINERS.md) | NAS-local Compose setup, profiling, and native build artifacts |
 | [TrueNAS deployment](docs/TRUENAS.md) | Paths, runtime checks, and sequential scheduled tasks |
 | [Tag sanitizing skill](skills/tag-sanitize/SKILL.md) | Agent instructions and detailed tagging policy |
 

@@ -12,3 +12,5 @@
 /resume
 
 .aria2-*/
+.env
+/container-state/

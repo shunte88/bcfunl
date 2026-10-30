@@ -1484,3 +1484,42 @@ fn existing_scan_ignores_unrelated_temporary_folders_but_keeps_real_duplicate_re
             .contains("Multiple verified server copies")
     );
 }
+
+#[test]
+fn limited_process_cleanup_does_not_walk_or_clean_unrelated_history() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    let server = root.path().join("server");
+    fs::create_dir_all(input.join("fixture/Old")).unwrap();
+    let old = input.join("fixture/Old/old.flac");
+    fs::write(&old, b"retain old payload").unwrap();
+    let db = Database::open(input.join("collection.sqlite3").to_str().unwrap()).unwrap();
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path,purchase_date) VALUES('fixture','new','New','New','unused','complete','missing.zip','2026-10-30')",&[]).unwrap();
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path,purchase_date,process_date,processed_path) VALUES('fixture','old','Old','Old','unused','complete',?,'2020-01-01','success','unavailable/server')",&[old.to_str().unwrap()]).unwrap();
+    let args = Args::try_parse_from([
+        "bcfunl",
+        "--process",
+        "--clean",
+        "--count",
+        "1",
+        "--timings",
+        "--user",
+        "fixture",
+        "--output",
+        input.to_str().unwrap(),
+        "--serverdir",
+        server.to_str().unwrap(),
+    ])
+    .unwrap();
+    let error = run(&args).unwrap_err().to_string();
+    assert!(error.contains("1 releases failed processing"), "{error}");
+    assert_eq!(fs::read(old).unwrap(), b"retain old payload");
+    let rows = db
+        .query(
+            "SELECT item_key FROM releases WHERE process_error IS NOT NULL",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(rows[0][0].as_deref(), Some("new"));
+    assert_eq!(rows.len(), 1);
+}

@@ -64,6 +64,7 @@ Options:
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
 | `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
 | `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with up to 16 connections per server per release; `--process` uses local workers. Omit for sequential work. |
+| `--timings` | With `--process`, report per-release stage times, history checks, and cleanup duration, including failed stages. |
 | `--summary` | Download mode prints the run status table; processing prints attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish completed downloads offline. |
@@ -232,7 +233,7 @@ genres and styles use this same routine when provider enrichment is connected. T
 catalog suffixes. Cover images are retained, and an archive cover or embedded
 picture supplies `folder.jpg` when available.
 
-Requirements: Linux, `7z` for ZIP archives, `ffprobe`, `ffmpeg`, and `metaflac` for
+Requirements: Linux or macOS, `7z` for ZIP archives, `ffprobe`, `ffmpeg`, and `metaflac` for
 FLAC tags. FLAC, WAV, MP3, AIFF, ALAC/AAC in M4A, and Vorbis/Ogg retain their audio
 format. Native FLAC/WAV/MP3 tagging is reused from mcfunl; other containers are
 remuxed with audio stream copy. Every prepared track must preserve its decoded
@@ -264,6 +265,9 @@ contains no manifest and is not a completed release. Sources and archives are
 not removed unless explicit `--clean` eligibility checks succeed. SIGINT/SIGTERM reap
 children and clean private staging; SIGKILL may leave hidden staging directories.
 Verification and temporary extraction/output copies require time and free space.
+ZIP extraction uses local staging under `--output`; verified output is prepared
+on `--serverdir` for atomic publication. Use `--timings` with `--process` for
+per-stage durations, history-check time, cleanup time, and total processing time.
 
 ## Release genres and country
 
@@ -625,7 +629,8 @@ bcfunl manifest are retained for review. Cleanup checks publication presence;
 it does not repeat decoded-audio verification from processing.
 
 Artist and purchase-date filters also apply to cleanup. `--count` caps removed
-payloads independently of the processing attempt limit. Standalone cleanup does
+payloads in standalone cleanup. Combined `--process --clean` considers only
+releases attempted in that processing invocation. Standalone cleanup does
 not accept `--force` or `--parallel`; `--force` with processing never bypasses
 cleanup checks. When some releases fail processing, cleanup still handles the
 successful releases and the command retains its failure exit status. A signal
@@ -642,7 +647,9 @@ the updated binary to participate in this lock.
 For deployment paths and prepared task commands, see the
 [TrueNAS deployment guide](TRUENAS.md).
 
-bcfunl processing currently requires Linux (`renameat2` for atomic publication).
+Linux uses `renameat2` for publication when supported; macOS uses exclusive
+destination reservation and ordinary directory rename. Native Windows processing
+and cleanup currently require the Linux container.
 For a Linux-based TrueNAS installation, run it in a Linux container or VM with
 staging and music datasets mounted persistently. For FreeBSD-based TrueNAS CORE,
 use a Linux VM. Install the runtime utilities inside that environment, rather
@@ -736,3 +743,24 @@ unchecked ordinary rename over an existing library folder. If the share also
 rejects ordinary empty-directory replacement, publication fails safely. Validate
 with a small processing batch on the actual mount. Use
 `findmnt -T /path/to/music -o TARGET,FSTYPE,OPTIONS` to identify the mount type.
+
+### Processing performance and limited runs
+
+`--count` is checked before visiting additional completed history once the limit
+is reached. ZIP extraction uses the local staging filesystem, reducing network
+traffic when publishing over a share. Existing-copy audio verification remains
+mandatory; `--parallel` is a release count, not a promise of higher throughput.
+Start with two workers on a remote share and compare timing output before raising
+it. On a NAS-local container, datasets use local bind mounts rather than NFS.
+
+Combined `--process --clean` considers only attempted releases in that run;
+standalone `--clean` retains the filtered historical cleanup behavior. Failures
+in processing and cleanup are both reported rather than losing the processing
+error beneath a cleanup error. A decode failure now includes the offending audio
+path so source and existing destination failures can be distinguished.
+
+The message `Publish release without replacing existing server files: Invalid
+argument (os error 22)` without a destination path is from the older publication
+code. Verify the exact invoked binary with `--version` before retrying a NAS
+publication fix. media2026's reported test executable was v0.1.24, before the
+v0.1.25 fallback.

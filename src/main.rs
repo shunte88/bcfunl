@@ -5,10 +5,15 @@ mod download;
 mod genres;
 mod metadata;
 mod net;
+#[cfg(unix)]
+mod processing;
+#[cfg(windows)]
+#[path = "processing_windows.rs"]
 mod processing;
 mod resources;
 mod sanitizing;
 mod shutdown;
+mod staging;
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};

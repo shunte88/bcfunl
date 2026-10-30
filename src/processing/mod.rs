@@ -11,10 +11,9 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashSet},
-    ffi::CString,
     fs::{self, File, OpenOptions},
     io::Read,
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -766,36 +765,42 @@ fn secure_parent(root: &Path, relative: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 fn publish(source: &Path, destination: &Path) -> Result<()> {
-    let src = CString::new(source.as_os_str().as_bytes())?;
-    let dest = CString::new(destination.as_os_str().as_bytes())?;
-    let status = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            src.as_ptr(),
-            libc::AT_FDCWD,
-            dest.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if status != 0 {
-        let error = std::io::Error::last_os_error();
-        if matches!(
-            error.raw_os_error(),
-            Some(libc::EINVAL | libc::EOPNOTSUPP | libc::ENOSYS)
-        ) {
-            eprintln!(
-                "  Filesystem does not support no-replace rename; reserving a new destination"
-            );
-            publish_reserved(source, destination)?;
-        } else {
-            return Err(error).with_context(|| {
-                format!(
-                    "Publish release without replacing existing server files: {}",
-                    destination.display()
-                )
-            });
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let src = CString::new(source.as_os_str().as_bytes())?;
+        let dest = CString::new(destination.as_os_str().as_bytes())?;
+        let status = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                src.as_ptr(),
+                libc::AT_FDCWD,
+                dest.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if status != 0 {
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::EINVAL | libc::EOPNOTSUPP | libc::ENOSYS)
+            ) {
+                eprintln!(
+                    "  Filesystem does not support no-replace rename; reserving a new destination"
+                );
+                publish_reserved(source, destination)?;
+            } else {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Publish release without replacing existing server files: {}",
+                        destination.display()
+                    )
+                });
+            }
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    publish_reserved(source, destination)?;
     File::open(destination.parent().context("Publication parent")?)
         .and_then(|file| file.sync_all())
         .with_context(|| format!("Sync publication parent for {}", destination.display()))?;
@@ -1001,6 +1006,9 @@ fn process_one(
     shutdown::check()?;
     timing.next("publish");
     publish(&staging, &destination)?;
+    timing.next("temporary_cleanup");
+    drop(output_work);
+    drop(work);
     Ok((destination, plan, false))
 }
 
@@ -1064,25 +1072,7 @@ fn processing_rows(db: &Database, args: &Args) -> Result<Vec<crate::db::Row>> {
     db.query(&sql, &values.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
-pub(crate) struct StagingLock(File);
-impl Drop for StagingLock {
-    fn drop(&mut self) {
-        let _ = self.0.unlock();
-    }
-}
-
-pub(crate) fn staging_lock(input: &Path) -> Result<StagingLock> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let lock = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(input.join(".bcfunl-staging.lock"))?;
-    lock.try_lock()
-        .context("Another download, process, or clean job holds the staging directory lock")?;
-    Ok(StagingLock(lock))
-}
+pub(crate) use crate::staging::lock as staging_lock;
 
 pub fn run(args: &Args) -> Result<()> {
     let started = std::time::Instant::now();
@@ -1266,7 +1256,20 @@ pub fn run(args: &Args) -> Result<()> {
     }
     shutdown::check()?;
     if args.clean {
-        clean::completed(&db, args, &input, Some(&attempted_keys))?;
+        let cleanup_started = std::time::Instant::now();
+        let result = clean::completed(&db, args, &input, Some(&attempted_keys));
+        if args.timings {
+            eprintln!(
+                "Timing: cleanup {:.3}s",
+                cleanup_started.elapsed().as_secs_f64()
+            );
+        }
+        if let Err(error) = result {
+            if failures > 0 {
+                bail!("{failures} releases failed processing; cleanup also failed: {error:#}");
+            }
+            return Err(error);
+        }
     }
     ensure!(
         failures == 0,

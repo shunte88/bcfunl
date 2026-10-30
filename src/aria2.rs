@@ -140,12 +140,14 @@ fn transfer(cmd: &mut Command, url: &str) -> Result<()> {
     Ok(())
 }
 fn downloads_home() -> Result<PathBuf> {
-    let home =
-        std::env::var_os("HOME").context("HOME is required for aria2c staging in ~/Downloads")?;
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .context("HOME or USERPROFILE is required for aria2c staging in Downloads")?;
     let home = PathBuf::from(home);
     ensure!(home.is_absolute(), "HOME must be an absolute path");
     Ok(home)
 }
+#[cfg(any(unix, test))]
 fn staging_owner(name: &str) -> Option<i32> {
     let (pid, token) = name.strip_prefix("bcfunl-")?.split_once('-')?;
     if token.len() != 16 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -180,6 +182,12 @@ fn active_transfer_directories() -> Result<std::collections::HashSet<PathBuf>> {
     }
     Ok(active)
 }
+#[cfg(windows)]
+fn cleanup(_: &Path) -> Result<usize> {
+    // Never remove another process's staging without a reliable live-owner check.
+    Ok(0)
+}
+#[cfg(unix)]
 fn cleanup(home: &Path) -> Result<usize> {
     let downloads = home.join("Downloads");
     if !downloads.exists() {

@@ -5,13 +5,17 @@ Deployment paths:
 | Content | Path |
 | --- | --- |
 | Application, maps, cookies, logs | `~/bcfunl` under the task account's persistent home |
-| Download staging and collection history | `/media/backup/bcfstage` |
-| Published music | `/mnt/tankn4/F8NAS1/music` |
-| Default research library | `/media/backup/bcfstage/resources/library.sqlite3` |
+| Download staging and collection history | `/mnt/backup` |
+| Published music | `/mnt/tankn4/music` |
+| Default research library | `/mnt/backup/resources/library.sqlite3` |
 
 These are prepared commands, not installed or enabled tasks. Wait for the NAS
 update to finish before checking the runtime. Use the same task account for all
 jobs, with a persistent home and read/write access to both datasets.
+
+For NAS-local container execution with all tools included, see
+[the Compose guide](CONTAINERS.md). Update stored path prefixes with the documented SQL migration when moving
+an existing staging history from media2026.
 
 ## Runtime check
 
@@ -29,7 +33,7 @@ for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum flock; do
     command -v "$tool" || printf '%s: MISSING\n' "$tool"
 done
 ldd ./bcfunl
-for directory in /media/backup/bcfstage /mnt/tankn4/F8NAS1/music; do
+for directory in /mnt/backup /mnt/tankn4/music; do
     test -d "$directory" && test -r "$directory" && test -w "$directory" \
         || printf 'Directory missing or not accessible: %s\n' "$directory"
 done
@@ -56,7 +60,7 @@ Start without cleanup, using a small number of releases:
 
 ```sh
 cd "$HOME/bcfunl" && ./bcfunl --process --user johnsmith \
-  --output /media/backup/bcfstage --serverdir /mnt/tankn4/F8NAS1/music \
+  --output /mnt/backup --serverdir /mnt/tankn4/music \
   --parallel 2 --count 2 --summary
 ```
 
@@ -90,7 +94,7 @@ Suggested schedule: **01:00 daily** (`0 1 * * *`). Use this single task instead
 of separate acquisition and processing tasks:
 
 ```sh
-sh "$HOME/bcfunl/scripts/maintenance.sh" johnsmith /media/backup/bcfstage /mnt/tankn4/F8NAS1/music
+sh "$HOME/bcfunl/scripts/maintenance.sh" johnsmith /mnt/backup /mnt/tankn4/music
 ```
 
 Once the collection is fully shadowed, this checks for new releases, processes
@@ -103,7 +107,7 @@ time needs to be estimated.
 Suggested schedule: **04:00 on the fifth day of each month** (`0 4 5 * *`).
 
 ```sh
-cd "$HOME/bcfunl" && flock -n .bcfunl-maintenance.lock ./bcfunl --resources --output /media/backup/bcfstage >> logs/resources.log 2>&1
+cd "$HOME/bcfunl" && flock -n .bcfunl-maintenance.lock ./bcfunl --resources --output /mnt/backup >> logs/resources.log 2>&1
 ```
 
 Only current-month snapshots are selected. Missing snapshots produce a failure;
