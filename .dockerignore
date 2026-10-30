@@ -1,0 +1,12 @@
+**
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!src/
+!src/**
+!data/
+!data/**
+!scripts/
+!scripts/maintenance.sh
+!LICENSE
+!scripts/migrate-nas-paths.sql

@@ -1,0 +1,135 @@
+name: Build native executables
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: linux-x64
+            binary: bcfunl
+          - os: macos-14
+            artifact: macos-arm64
+            binary: bcfunl
+          - os: windows-2022
+            artifact: windows-x64
+            binary: bcfunl.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: bcfunl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: bcfunl
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: shunte88/vcw
+          ref: ${{ vars.VCW_REF || 'main' }}
+          token: ${{ secrets.VCW_READ_TOKEN || github.token }}
+          path: vcw
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install SQLite and test utilities (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev ffmpeg flac p7zip-full gzip
+      - name: Install SQLite (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sqlite
+      - name: Configure SQLite (macOS)
+        if: runner.os == 'macOS'
+        run: echo "RUSTFLAGS=-L native=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
+      - name: Install SQLite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install sqlite3:x64-windows-static-md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTFLAGS=-L native=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build on every push
+        run: cargo +stable build --locked --release
+      - name: Test Linux pipeline
+        if: runner.os == 'Linux'
+        run: cargo +stable test --locked
+      - name: Build Linux runtime image
+        if: runner.os == 'Linux'
+        run: docker buildx build --load --build-context vcw=../vcw --tag bcfunl:ci .
+      - name: Check container executable and tools
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm bcfunl:ci --version
+          docker run --rm --entrypoint sh bcfunl:ci -ec 'for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum flock sqlite3; do command -v "$tool"; done'
+      - name: Check executable
+        shell: bash
+        run: ./target/release/${{ matrix.binary }} --version
+      - name: Package application and support files
+        shell: bash
+        run: |
+          mkdir -p package/scripts package/docs
+          cp target/release/${{ matrix.binary }} package/
+          cp -R data assets skills package/
+          cp scripts/maintenance.sh scripts/migrate-nas-paths.sql package/scripts/
+          cp README.md LICENSE package/
+          cp ../vcw/LICENSE package/VCW-LICENSE
+          cp docs/REFERENCE.md docs/TRUENAS.md docs/CONTAINERS.md package/docs/
+          tar -czf bcfunl-${{ matrix.artifact }}.tar.gz -C package .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bcfunl-${{ matrix.artifact }}-${{ github.sha }}
+          path: bcfunl/bcfunl-${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+  publish-image:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: container-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: bcfunl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: bcfunl
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: shunte88/vcw
+          ref: ${{ vars.VCW_REF || 'main' }}
+          token: ${{ secrets.VCW_READ_TOKEN || github.token }}
+          path: vcw
+          persist-credentials: false
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Build publication image
+        run: |
+          docker buildx build --load --build-context vcw=../vcw \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" .
+      - name: Verify image before publication
+        run: |
+          docker run --rm "$IMAGE:sha-$GITHUB_SHA" --version
+          docker run --rm --entrypoint sh "$IMAGE:sha-$GITHUB_SHA" -ec 'for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum flock sqlite3; do command -v "$tool"; done'
+      - name: Sign in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish commit image and default-branch latest
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+          if [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            docker tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
