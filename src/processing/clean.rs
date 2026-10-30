@@ -16,7 +16,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         "--clean requires an existing collection.sqlite3 in --output"
     );
     let db = Database::open(path.to_str().context("Database path is not UTF-8")?)?;
-    completed(&db, args, &input)
+    completed(&db, args, &input, None)
 }
 
 fn remove(db: &Database, args: &Args, input: &Path, row: &crate::db::Row) -> Result<bool> {
@@ -71,11 +71,19 @@ fn remove(db: &Database, args: &Args, input: &Path, row: &crate::db::Row) -> Res
     Ok(true)
 }
 
-pub(super) fn completed(db: &Database, args: &Args, input: &Path) -> Result<()> {
+pub(super) fn completed(
+    db: &Database,
+    args: &Args,
+    input: &Path,
+    keys: Option<&std::collections::HashSet<String>>,
+) -> Result<()> {
     let mut cleaned = 0;
     let mut failures = 0;
     for row in processing_rows(db, args)? {
         shutdown::check()?;
+        if keys.is_some_and(|keys| !keys.contains(row[0].as_deref().unwrap_or_default())) {
+            continue;
+        }
         if args.count.is_some_and(|limit| cleaned >= limit) {
             break;
         }

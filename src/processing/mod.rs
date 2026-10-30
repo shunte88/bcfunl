@@ -14,7 +14,7 @@ use std::{
     ffi::CString,
     fs::{self, File, OpenOptions},
     io::Read,
-    os::unix::ffi::OsStrExt,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -92,10 +92,14 @@ fn audio(path: &Path) -> bool {
 }
 fn collect(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    for entry in fs::read_dir(root)? {
+    for entry in
+        fs::read_dir(root).with_context(|| format!("Read release directory {}", root.display()))?
+    {
         shutdown::check()?;
         let entry = entry?;
-        let kind = entry.file_type()?;
+        let kind = entry
+            .file_type()
+            .with_context(|| format!("Inspect release member {}", entry.path().display()))?;
         ensure!(
             !kind.is_symlink(),
             "Symlink refused in release: {}",
@@ -169,7 +173,8 @@ fn pcm_hash(path: &Path) -> Result<String> {
                 "csv=p=0",
             ])
             .arg(path),
-    )?;
+    )
+    .with_context(|| format!("Inspect audio layout {}", path.display()))?;
     ensure!(!layout.trim().is_empty(), "Missing audio stream layout");
     let hash = command(
         Command::new("ffmpeg")
@@ -186,7 +191,8 @@ fn pcm_hash(path: &Path) -> Result<String> {
                 "sha256",
                 "-",
             ]),
-    )?;
+    )
+    .with_context(|| format!("Decode audio {}", path.display()))?;
     Ok(format!("{}:{}", layout.trim(), hash.trim()))
 }
 
@@ -661,36 +667,56 @@ fn existing(server: &Path, plan: &Plan, source: &[Track]) -> Result<Option<PathB
         candidates.push(exact.clone());
     }
     // Older mcfunl outputs may differ only by country/catalog suffix or letter case.
-    for artist in fs::read_dir(server)? {
+    for artist in fs::read_dir(server)
+        .with_context(|| format!("Scan server directory {}", server.display()))?
+    {
         let artist = artist?;
-        if artist.file_type()?.is_symlink()
-            || !artist.file_type()?.is_dir()
-            || key(&artist.file_name().to_string_lossy()) != key(&template::safe(&plan.artist))
-        {
+        // Unrelated temporary folders can vanish while another worker finishes.
+        if key(&artist.file_name().to_string_lossy()) != key(&template::safe(&plan.artist)) {
             continue;
         }
-        for album in fs::read_dir(artist.path())? {
+        let kind = artist
+            .file_type()
+            .with_context(|| format!("Inspect artist directory {}", artist.path().display()))?;
+        if kind.is_symlink() || !kind.is_dir() {
+            continue;
+        }
+        for album in fs::read_dir(artist.path())
+            .with_context(|| format!("Scan artist directory {}", artist.path().display()))?
+        {
             let album = album?;
-            if !album.file_type()?.is_symlink()
-                && album.file_type()?.is_dir()
-                && key(base_album(&album.file_name().to_string_lossy()))
-                    == key(base_album(&template::safe(&plan.album)))
+            if key(base_album(&album.file_name().to_string_lossy()))
+                == key(base_album(&template::safe(&plan.album)))
                 && !candidates.contains(&album.path())
             {
-                candidates.push(album.path());
+                let kind = album.file_type().with_context(|| {
+                    format!("Inspect album directory {}", album.path().display())
+                })?;
+                if kind.is_dir() && !kind.is_symlink() {
+                    candidates.push(album.path());
+                }
             }
         }
     }
     let mut matched = None;
+    let mut directories = HashSet::new();
     for candidate in candidates {
         ensure!(
-            candidate.canonicalize()?.starts_with(server),
+            candidate
+                .canonicalize()
+                .with_context(|| format!("Resolve existing release {}", candidate.display()))?
+                .starts_with(server),
             "Existing release resolves outside --serverdir"
         );
         ensure!(
             !fs::symlink_metadata(&candidate)?.file_type().is_symlink(),
             "Server release is a symlink"
         );
+        let metadata = fs::metadata(&candidate)
+            .with_context(|| format!("Inspect existing release {}", candidate.display()))?;
+        if metadata.ino() != 0 && !directories.insert((metadata.dev(), metadata.ino())) {
+            continue;
+        }
         match matching_release(source, &candidate) {
             Ok(true) => {
                 ensure!(
@@ -752,12 +778,52 @@ fn publish(source: &Path, destination: &Path) -> Result<()> {
         )
     };
     if status != 0 {
-        return Err(std::io::Error::last_os_error())
-            .context("Publish release without replacing existing server files");
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::EINVAL | libc::EOPNOTSUPP | libc::ENOSYS)
+        ) {
+            eprintln!(
+                "  Filesystem does not support no-replace rename; reserving a new destination"
+            );
+            publish_reserved(source, destination)?;
+        } else {
+            return Err(error).with_context(|| {
+                format!(
+                    "Publish release without replacing existing server files: {}",
+                    destination.display()
+                )
+            });
+        }
     }
-    File::open(destination.parent().context("Publication parent")?)?.sync_all()?;
+    File::open(destination.parent().context("Publication parent")?)
+        .and_then(|file| file.sync_all())
+        .with_context(|| format!("Sync publication parent for {}", destination.display()))?;
     Ok(())
 }
+fn publish_reserved(source: &Path, destination: &Path) -> Result<()> {
+    // Some NAS mounts reject RENAME_NOREPLACE. Reserve only a previously absent name.
+    fs::create_dir(destination).with_context(|| {
+        format!(
+            "Reserve new server destination without replacing existing files: {}",
+            destination.display()
+        )
+    })?;
+    let reserved = fs::metadata(destination)?;
+    let result = fs::rename(source, destination).with_context(|| format!("Publish into reserved empty directory {}; NAS must support replacing an empty directory", destination.display()));
+    if result.is_err() {
+        // Never recursively remove: another writer may have populated the reservation.
+        if fs::symlink_metadata(destination).is_ok_and(|meta| {
+            !meta.file_type().is_symlink()
+                && meta.dev() == reserved.dev()
+                && meta.ino() == reserved.ino()
+        }) {
+            let _ = fs::remove_dir(destination);
+        }
+    }
+    result
+}
+
 fn verify_tags(expected: &Tags, path: &Path) -> Result<()> {
     let (actual, _) = tagging::read(path)?;
     for (key, want) in expected {
@@ -775,13 +841,59 @@ fn verify_tags(expected: &Tags, path: &Path) -> Result<()> {
     }
     Ok(())
 }
+struct Timing {
+    enabled: bool,
+    label: String,
+    started: std::time::Instant,
+    checkpoint: std::time::Instant,
+    stage: &'static str,
+}
+impl Timing {
+    fn new(release: &Release, enabled: bool) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            enabled,
+            label: format!("{} - {}", release.artist, release.album),
+            started: now,
+            checkpoint: now,
+            stage: "source",
+        }
+    }
+    fn next(&mut self, stage: &'static str) {
+        if self.enabled {
+            eprintln!(
+                "  Timing [{}] {}: {:.3}s",
+                self.label,
+                self.stage,
+                self.checkpoint.elapsed().as_secs_f64()
+            );
+        }
+        self.checkpoint = std::time::Instant::now();
+        self.stage = stage;
+    }
+}
+impl Drop for Timing {
+    fn drop(&mut self) {
+        self.next("done");
+        if self.enabled {
+            eprintln!(
+                "  Timing [{}] total: {:.3}s",
+                self.label,
+                self.started.elapsed().as_secs_f64()
+            );
+        }
+    }
+}
+
 fn process_one(
     release: &Release,
     input_root: &Path,
     server: &Path,
     template: &template::Template,
     library: Option<&genres::Library>,
+    timings: bool,
 ) -> Result<(PathBuf, Plan, bool)> {
+    let mut timing = Timing::new(release, timings);
     let meta = fs::symlink_metadata(&release.source).context("Read downloaded source")?;
     ensure!(
         meta.is_file() && !meta.file_type().is_symlink(),
@@ -792,7 +904,8 @@ fn process_one(
         source.starts_with(input_root),
         "Downloaded source is outside --output"
     );
-    let work = tempfile::tempdir_in(server)?;
+    timing.next("extract_local");
+    let work = tempfile::tempdir_in(input_root)?;
     let extraction = work.path().join("extracted");
     fs::create_dir(&extraction)?;
     let paths = if extension(&source) == "zip" {
@@ -805,15 +918,21 @@ fn process_one(
         !paths.iter().any(|p| extension(p) == "cue"),
         "CUE-based releases require the existing mcfunl processor"
     );
+    timing.next("read_tags");
     let mut tracks = tracks(&paths)?;
+    timing.next("prepare_tags");
     let mut plan = prepare_tags(release, &mut tracks, template)?;
+    timing.next("verify_existing");
     if let Some(existing) = existing(server, &plan, &tracks)? {
         return Ok((existing, plan, true));
     }
+    timing.next("genre_fallback");
     if let Some(library) = library {
         plan.genre_fallback = library.apply(&plan.artist, &mut tracks)?;
     }
-    let staging = work.path().join("publish");
+    timing.next("copy_tag_verify");
+    let output_work = tempfile::tempdir_in(server)?;
+    let staging = output_work.path().join("publish");
     fs::create_dir(&staging)?;
     for (track, relative) in tracks.iter().zip(&plan.files) {
         shutdown::check()?;
@@ -828,6 +947,7 @@ fn process_one(
         verify_tags(&track.tags, &dest)?;
         File::open(&dest)?.sync_all()?;
     }
+    timing.next("artwork");
     if let Some(cover) = paths
         .iter()
         .find(|path| {
@@ -857,6 +977,7 @@ fn process_one(
             }
         }
     }
+    timing.next("manifest_and_sync");
     let manifest = staging.join(".bcfunl-release.json");
     fs::write(
         &manifest,
@@ -878,6 +999,7 @@ fn process_one(
     secure_parent(server, plan.directory.parent().context("Release parent")?)?;
     let destination = server.join(&plan.directory);
     shutdown::check()?;
+    timing.next("publish");
     publish(&staging, &destination)?;
     Ok((destination, plan, false))
 }
@@ -963,6 +1085,7 @@ pub(crate) fn staging_lock(input: &Path) -> Result<StagingLock> {
 }
 
 pub fn run(args: &Args) -> Result<()> {
+    let started = std::time::Instant::now();
     crate::sanitizing::load_artist_map()?;
     let template = template::Template::new(args.template.as_deref().unwrap_or(template::DEFAULT))?;
     let input = args
@@ -1004,6 +1127,16 @@ pub fn run(args: &Args) -> Result<()> {
         None
     };
     let rows = processing_rows(&db, args)?;
+    if args.timings {
+        eprintln!(
+            "Timing: bcfunl v{} setup/query {:.3}s, {} eligible history rows",
+            env!("CARGO_PKG_VERSION"),
+            started.elapsed().as_secs_f64(),
+            rows.len()
+        );
+    }
+    let mut attempted_keys = HashSet::new();
+    let mut history_time = std::time::Duration::ZERO;
     let mut attempted = 0;
     let mut failures = 0;
     let mut published = 0;
@@ -1020,7 +1153,10 @@ pub fn run(args: &Args) -> Result<()> {
                     db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback) WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
                     if exists {
                         *skipped += 1;
-                        eprintln!("  Verified existing server release; skipped");
+                        eprintln!(
+                            "  Verified existing {} - {}; skipped",
+                            release.artist, release.album
+                        );
                     } else {
                         published += 1;
                         eprintln!("  Published {}", path.display());
@@ -1050,17 +1186,19 @@ pub fn run(args: &Args) -> Result<()> {
             if shutdown::requested() {
                 break;
             }
-            if row[9].is_some()
+            if args.count.is_some_and(|limit| attempted >= limit) {
+                break;
+            }
+            let history_started = std::time::Instant::now();
+            let completed = row[9].is_some()
                 && !args.force
                 && row[10].as_deref().is_some_and(|p| {
                     completed_here(p, server, row[0].as_deref().unwrap_or_default())
-                })
-            {
+                });
+            history_time += history_started.elapsed();
+            if completed {
                 skipped += 1;
                 continue;
-            }
-            if args.count.is_some_and(|limit| attempted >= limit) {
-                break;
             }
             attempted += 1;
             let get = |i: usize| row[i].clone().unwrap_or_default();
@@ -1079,6 +1217,7 @@ pub fn run(args: &Args) -> Result<()> {
                 "[{attempted}] Process {} - {}",
                 release.artist, release.album
             );
+            attempted_keys.insert(release.key.clone());
             let worker_release = release.clone();
             active.push_back((
                 release,
@@ -1087,7 +1226,14 @@ pub fn run(args: &Args) -> Result<()> {
                         .as_deref()
                         .map(genres::Library::open)
                         .transpose()?;
-                    process_one(&worker_release, input, server, template, library.as_ref())
+                    process_one(
+                        &worker_release,
+                        input,
+                        server,
+                        template,
+                        library.as_ref(),
+                        args.timings,
+                    )
                 }),
             ));
             if active.len() == limit {
@@ -1106,6 +1252,13 @@ pub fn run(args: &Args) -> Result<()> {
         }
         Ok(())
     })?;
+    if args.timings {
+        eprintln!(
+            "Timing: history skip checks {:.3}s; processing wall {:.3}s",
+            history_time.as_secs_f64(),
+            started.elapsed().as_secs_f64()
+        );
+    }
     if args.summary {
         println!(
             "Processing: {attempted} attempted, {published} published, {skipped} skipped, {failures} failed"
@@ -1113,7 +1266,7 @@ pub fn run(args: &Args) -> Result<()> {
     }
     shutdown::check()?;
     if args.clean {
-        clean::completed(&db, args, &input)?;
+        clean::completed(&db, args, &input, Some(&attempted_keys))?;
     }
     ensure!(
         failures == 0,

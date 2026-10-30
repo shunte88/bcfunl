@@ -67,6 +67,9 @@ struct Args {
     /// Print a status table for releases attempted since this process started
     #[arg(long)]
     summary: bool,
+    /// Report processing stage durations, including failed stages
+    #[arg(long, requires = "process")]
+    timings: bool,
     /// Tag and publish completed downloads without network lookups
     #[arg(long)]
     process: bool,

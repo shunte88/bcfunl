@@ -408,6 +408,7 @@ fn matching_names_with_different_audio_are_not_skipped_or_overwritten() {
         server.path(),
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
+        false,
     );
     assert!(result.is_err());
     assert_eq!(fs::read(&dest).unwrap(), original);
@@ -448,6 +449,7 @@ fn embedded_artwork_survives_tagging_and_supplies_folder_image() {
         server.path(),
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
+        false,
     )
     .unwrap();
     assert!(
@@ -1410,4 +1412,75 @@ fn processing_removes_rejected_existing_genres_instead_of_leaving_old_tags() {
     )
     .unwrap();
     assert_eq!(tracks[0].tags["GENRE"], ["Ambient", "Post-Punk"]);
+}
+
+#[test]
+fn reserved_publication_supports_plain_rename_without_overwriting_any_destination() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("staging");
+    let destination = root.path().join("album");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("track.flac"), b"verified payload").unwrap();
+    fs::write(source.join(".bcfunl-release.json"), b"manifest").unwrap();
+    publish_reserved(&source, &destination).unwrap();
+    assert!(!source.exists());
+    assert_eq!(
+        fs::read(destination.join("track.flac")).unwrap(),
+        b"verified payload"
+    );
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("track.flac"), b"replacement").unwrap();
+    assert!(publish_reserved(&source, &destination).is_err());
+    assert_eq!(
+        fs::read(destination.join("track.flac")).unwrap(),
+        b"verified payload"
+    );
+    let empty = root.path().join("existing-empty");
+    fs::create_dir(&empty).unwrap();
+    assert!(publish_reserved(&source, &empty).is_err());
+    assert!(empty.is_dir());
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&destination, &alias).unwrap();
+    assert!(publish_reserved(&source, &alias).is_err());
+    let failed = root.path().join("failed");
+    assert!(publish_reserved(&root.path().join("missing"), &failed).is_err());
+    assert!(!failed.exists());
+    assert!(source.join("track.flac").exists());
+}
+
+#[test]
+fn existing_scan_ignores_unrelated_temporary_folders_but_keeps_real_duplicate_review() {
+    let root = tempfile::tempdir().unwrap();
+    let (_fixture, path) = fixture("flac");
+    tagging::write(&path, &sample()).unwrap();
+    let r = release(path.clone());
+    let mut tracks = vec![Track {
+        path,
+        tags: sample(),
+        duration: 0.15,
+    }];
+    let plan = prepare_tags(
+        &r,
+        &mut tracks,
+        &template::Template::new(template::DEFAULT).unwrap(),
+    )
+    .unwrap();
+    // An unrelated broken link is never probed as a candidate artist directory.
+    std::os::unix::fs::symlink(
+        root.path().join("gone"),
+        root.path().join(".bcfunl-process-other"),
+    )
+    .unwrap();
+    assert!(existing(root.path(), &plan, &tracks).unwrap().is_none());
+    for name in ["Proof [GB] [CAT01]", "Proof [US] [OLD01]"] {
+        let folder = root.path().join("Romy").join(name);
+        fs::create_dir_all(&folder).unwrap();
+        fs::copy(&tracks[0].path, folder.join("01.flac")).unwrap();
+    }
+    assert!(
+        existing(root.path(), &plan, &tracks)
+            .unwrap_err()
+            .to_string()
+            .contains("Multiple verified server copies")
+    );
 }

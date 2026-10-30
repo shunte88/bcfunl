@@ -1446,3 +1446,55 @@ processing, cleanup, deployment, provider query or library retagging started.
 Next session: await user's direction on curated vocabulary and/or acceptance
 of v0.1.24. Preserve US English, no em dashes, johnsmith in all documentation
 examples. Existing TrueNAS deployment and sequential workflow remain pending.
+
+## 2026-10-30: shared NAS processing failures (v0.1.25)
+
+User runs staging on media2026 and processing against a NAS share. Supplied logs
+show ENOENT(error2), EINVAL(error22) at no-replace publication, audio mismatch,
+and multiple verified copies. Asked for findmnt -T SERVERDIR -o TARGET,FSTYPE,OPTIONS
+as asynchronous clarification; exact share type/options not yet supplied.
+No remote mount/runtime inspection performed.
+
+Found likely ENOENT race: existing-copy scan called file_type on unrelated root
+entries including another worker's transient .bcfunl-process folder before name
+filtering. Now names are checked first at artist/album levels; only relevant
+paths probed. Added path contexts for directory traversal and publication sync.
+Existing candidates with same nonzero (device,inode) identity deduplicate so
+case aliases on some shares do not falsely count as multiple physical copies.
+Genuinely separate verified directories and audio mismatches remain review
+failures, unchanged. Skip logs now identify artist/release under parallel output.
+
+Linux rename documentation confirms RENAME_NOREPLACE can return EINVAL when
+filesystem lacks flag support. Publication catches only EINVAL/EOPNOTSUPP/ENOSYS,
+exclusively creates a previously absent empty destination, then uses ordinary
+rename to replace that owned reservation. Existing destinations (even empty or
+symlink) remain refused. Failure cleanup uses remove_dir only, never recursive,
+and only when reservation identity still matches. Share must support ordinary
+empty-directory replacement; if not, publication still fails with original
+payload retained. A brief empty reservation is visible before atomic completed
+release rename, contains no manifest and is not completion. No unsafe unchecked
+rename over a preexisting destination. NFS failure ambiguity leaves any nonempty
+published output intact; next run can verify it.
+
+Added regression tests for reserved publication, existing nonempty/empty/symlink
+refusal, failed-reservation cleanup and source retention, unrelated scan entries,
+and preserved genuine-duplicate review. 108 tests passed, one parent fixture
+ignored; formatting, strict all-target offline Clippy and optimized offline
+release build passed. bcfunl v0.1.25 (built 2026-10-30T12:38:28Z). docs/REFERENCE.md updated.
+No production files/history changed or NAS test/deployment performed. Exact
+share compatibility and ENOENT cause still need acceptance on media2026. Recommend
+small retry without force/clean initially; do not interrupt user's active batch.
+Source: https://man7.org/linux/man-pages/man2/rename.2.html .
+
+## 2026-10-30: media2026 mount confirmed NFSv3
+
+User supplied findmnt output for /mnt/FN042018/F8NAS1/music/ on media2026.
+Mount target /mnt/FN042018, FSTYPE nfs, vers=3, rw, hard, proto=tcp,
+rsize/wsize1048576, timeo600, retrans2, sec=sys. This is the CLIENT music path,
+separate from the NAS-native /mnt/tankn4/F8NAS1/music path documented earlier.
+NFSv3 is consistent with the observed RENAME_NOREPLACE EINVAL; v0.1.25's
+reserved-empty-directory/plain-rename fallback is intended for this case.
+Actual share publication test remains pending. Do not claim verified NAS support
+from mount identification alone. ENOENT scan race and genuine duplicate/audio
+mismatch reviews remain as described in prior entry. No code/deployment changes
+or live processing performed while recording this information.

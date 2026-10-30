@@ -255,8 +255,13 @@ attempt counts. Previously processed outputs with a valid manifest and present
 tracks skip quickly; older external outputs are verified again. A successful
 new download clears old processing completion so changed audio is reconsidered.
 A processor lock covers the destination library. Whole releases publish through
-Linux atomic no-replace directory renames, which the destination filesystem must
-support. Sources and archives are never renamed or removed. SIGINT/SIGTERM reap
+Linux atomic no-replace directory renames. If the filesystem rejects that flag,
+bcfunl exclusively reserves a new empty destination and uses ordinary directory
+rename to replace that reservation. Existing destinations are still refused.
+The share must support atomic replacement of an empty directory; otherwise
+publication fails with sources retained. A briefly visible empty reservation
+contains no manifest and is not a completed release. Sources and archives are
+not removed unless explicit `--clean` eligibility checks succeed. SIGINT/SIGTERM reap
 children and clean private staging; SIGKILL may leave hidden staging directories.
 Verification and temporary extraction/output copies require time and free space.
 
@@ -716,3 +721,18 @@ not present in known credits/the artist map can remain. Existing published
 library files are not rewritten automatically; use a fresh destination when
 validating new tagging behavior. Raw Discogs research imports remain evidence;
 fallback values are filtered when applied to tracks.
+
+### Shared NAS drives
+
+Parallel existing-copy scans compare names before probing unrelated folders,
+which may be temporary directories being removed by another worker. Errors for
+relevant release paths include directory context. Candidate aliases with the
+same nonzero device/inode identity count once; genuinely separate verified
+copies still require review. Audio mismatches remain errors without overwriting.
+
+For a failed publication with error22, the reserved-empty-directory fallback
+handles filesystems that reject Linux `RENAME_NOREPLACE`. It does not use an
+unchecked ordinary rename over an existing library folder. If the share also
+rejects ordinary empty-directory replacement, publication fails safely. Validate
+with a small processing batch on the actual mount. Use
+`findmnt -T /path/to/music -o TARGET,FSTYPE,OPTIONS` to identify the mount type.
