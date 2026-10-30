@@ -2,6 +2,7 @@ name: Build native executables
 on: [push, workflow_dispatch]
 permissions:
   contents: read
+# removed mac and windows flavors
 jobs:
   build:
     strategy:
@@ -11,9 +12,9 @@ jobs:
           - os: ubuntu-24.04
             artifact: linux-x64
             binary: bcfunl
-          - os: macos-14
-            artifact: macos-arm64
-            binary: bcfunl
+          #- os: macos-14
+          #  artifact: macos-arm64
+          #  binary: bcfunl
           #- os: windows-2022
           #  artifact: windows-x64
           #  binary: bcfunl.exe
@@ -38,12 +39,12 @@ jobs:
       - name: Install SQLite and test utilities (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev ffmpeg flac p7zip-full gzip
-      - name: Install SQLite (macOS)
-        if: runner.os == 'macOS'
-        run: brew install sqlite
-      - name: Configure SQLite (macOS)
-        if: runner.os == 'macOS'
-        run: echo "RUSTFLAGS=-L native=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
+      #- name: Install SQLite (macOS)
+      #  if: runner.os == 'macOS'
+      #  run: brew install sqlite
+      #- name: Configure SQLite (macOS)
+      #  if: runner.os == 'macOS'
+      #  run: echo "RUSTFLAGS=-L native=$(brew --prefix sqlite)/lib" >> "$GITHUB_ENV"
       #- name: Install SQLite (Windows)
       #  if: runner.os == 'Windows'
       #  shell: pwsh
