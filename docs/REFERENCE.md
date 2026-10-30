@@ -764,3 +764,23 @@ argument (os error 22)` without a destination path is from the older publication
 code. Verify the exact invoked binary with `--version` before retrying a NAS
 publication fix. media2026's reported test executable was v0.1.24, before the
 v0.1.25 fallback.
+
+### Audio validation retries and detailed timings
+
+A failed audio layout/decode read gets one fresh-process retry after a200ms
+cooperative pause. The retry is limited to read-only PCM hashing, including
+existing-copy comparisons. Cancellation stops retries. Persistent failure after
+two attempts still prevents publication; a successful decode whose hash differs
+from its counterpart also fails. Tag writes and publication are not retried by
+this mechanism, and decoding errors are never ignored.
+
+With `--timings`, the combined copy/tag/verify phase also reports aggregate
+`copy`, `write_tags`, `source_pcm_hash`, `destination_pcm_hash`, `tag_readback`,
+and `file_sync` durations. Partial totals are printed on failure. PCM hash timing
+includes layout probing and any retry. Each track is fully decoded twice for
+source/output comparison, so cost depends on total audio duration/resolution,
+CPU, storage, and concurrent releases, not just compressed archive size.
+FLAC tag readback uses native comments directly and avoids an unnecessary
+ffprobe duration/stream probe; the same alias/multivalue normalization is retained.
+This is a limited overhead reduction, not a measured guarantee that a full album
+will validate within a few seconds.

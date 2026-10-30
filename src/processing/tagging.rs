@@ -53,12 +53,7 @@ pub fn read(path: &Path) -> Result<(Tags, f64)> {
     );
     let mut tags = Tags::new();
     if flac(path) {
-        let text = command(Command::new("metaflac").arg("--export-tags-to=-").arg(path))?;
-        for l in text.lines() {
-            if let Some((k, v)) = l.split_once('=') {
-                tags.entry(k.to_uppercase()).or_default().push(v.into());
-            }
-        }
+        tags = raw_flac_tags(path)?;
     } else {
         for object in [
             probe["format"]["tags"].as_object(),
@@ -92,6 +87,28 @@ pub fn read(path: &Path) -> Result<(Tags, f64)> {
             }
         }
     }
+    Ok((normalize_tags(tags), duration))
+}
+fn raw_flac_tags(path: &Path) -> Result<Tags> {
+    let mut tags = Tags::new();
+    let text = command(Command::new("metaflac").arg("--export-tags-to=-").arg(path))?;
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            tags.entry(key.to_uppercase())
+                .or_default()
+                .push(value.into());
+        }
+    }
+    Ok(tags)
+}
+pub(super) fn read_tags(path: &Path) -> Result<Tags> {
+    if flac(path) {
+        Ok(normalize_tags(raw_flac_tags(path)?))
+    } else {
+        read(path).map(|(tags, _)| tags)
+    }
+}
+fn normalize_tags(mut tags: Tags) -> Tags {
     for (from, to) in [
         ("ALBUM_ARTIST", "ALBUMARTIST"),
         ("TRACK", "TRACKNUMBER"),
@@ -116,7 +133,7 @@ pub fn read(path: &Path) -> Result<(Tags, f64)> {
             .collect();
     }
     split_fields(&mut tags);
-    Ok((tags, duration))
+    tags
 }
 fn syncsafe(bytes: &[u8]) -> Result<usize> {
     ensure!(

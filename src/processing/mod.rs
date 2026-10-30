@@ -158,7 +158,38 @@ fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
     )?;
     collect(destination)
 }
+fn retry_audio<T>(path: &Path, mut read: impl FnMut() -> Result<T>) -> Result<T> {
+    match read() {
+        Ok(value) => Ok(value),
+        Err(error) if shutdown::requested() => Err(error),
+        Err(error) => {
+            eprintln!(
+                "  Audio read failed for {}; retrying once: {error:#}",
+                path.display()
+            );
+            shutdown::pause(std::time::Duration::from_millis(200))?;
+            read().with_context(|| {
+                format!(
+                    "Audio validation failed after 2 attempts: {}",
+                    path.display()
+                )
+            })
+        }
+    }
+}
 fn pcm_hash(path: &Path) -> Result<String> {
+    retry_audio(path, || pcm_hash_once(path))
+}
+fn measured<T>(
+    duration: &mut std::time::Duration,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let started = std::time::Instant::now();
+    let result = operation();
+    *duration += started.elapsed();
+    result
+}
+fn pcm_hash_once(path: &Path) -> Result<String> {
     let layout = command(
         Command::new("ffprobe")
             .args([
@@ -830,7 +861,7 @@ fn publish_reserved(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn verify_tags(expected: &Tags, path: &Path) -> Result<()> {
-    let (actual, _) = tagging::read(path)?;
+    let actual = tagging::read_tags(path)?;
     for (key, want) in expected {
         let mut want = want.clone();
         want.sort();
@@ -939,19 +970,53 @@ fn process_one(
     let output_work = tempfile::tempdir_in(server)?;
     let staging = output_work.path().join("publish");
     fs::create_dir(&staging)?;
-    for (track, relative) in tracks.iter().zip(&plan.files) {
-        shutdown::check()?;
-        let dest = staging.join(relative);
-        fs::create_dir_all(dest.parent().context("Track parent")?)?;
-        fs::copy(&track.path, &dest)?;
-        tagging::write(&dest, &track.tags)?;
-        ensure!(
-            pcm_hash(&track.path)? == pcm_hash(&dest)?,
-            "Decoded audio changed during tagging"
-        );
-        verify_tags(&track.tags, &dest)?;
-        File::open(&dest)?.sync_all()?;
+    let mut parts = [std::time::Duration::ZERO; 6];
+    let validation = (|| -> Result<()> {
+        for (track, relative) in tracks.iter().zip(&plan.files) {
+            shutdown::check()?;
+            let dest = staging.join(relative);
+            measured(&mut parts[0], || {
+                fs::create_dir_all(dest.parent().context("Track parent")?)?;
+                fs::copy(&track.path, &dest)?;
+                Ok(())
+            })?;
+            measured(&mut parts[1], || tagging::write(&dest, &track.tags))?;
+            let source_hash = measured(&mut parts[2], || pcm_hash(&track.path))?;
+            let destination_hash = measured(&mut parts[3], || pcm_hash(&dest))?;
+            ensure!(
+                source_hash == destination_hash,
+                "Decoded audio changed during tagging: {}",
+                dest.display()
+            );
+            measured(&mut parts[4], || verify_tags(&track.tags, &dest))?;
+            measured(&mut parts[5], || {
+                File::open(&dest)?.sync_all()?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    })();
+    if timings {
+        for (name, elapsed) in [
+            "copy",
+            "write_tags",
+            "source_pcm_hash",
+            "destination_pcm_hash",
+            "tag_readback",
+            "file_sync",
+        ]
+        .iter()
+        .zip(parts)
+        {
+            eprintln!(
+                "  Timing [{} - {}] {name}: {:.3}s",
+                release.artist,
+                release.album,
+                elapsed.as_secs_f64()
+            );
+        }
     }
+    validation?;
     timing.next("artwork");
     if let Some(cover) = paths
         .iter()

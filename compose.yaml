@@ -1,10 +1,6 @@
 services:
   bcfunl:
-    build:
-      context: .
-      additional_contexts:
-        vcw: ${BCFUNL_VCW_SOURCE:-../vcw}
-    image: ${BCFUNL_IMAGE:-bcfunl:local}
+    image: ${BCFUNL_IMAGE:-ghcr.io/shunte88/bcfunl:latest}
     user: "${BCFUNL_UID:-1000}:${BCFUNL_GID:-1000}"
     init: true
     working_dir: /app

@@ -1635,3 +1635,96 @@ processing/cleanup, registry publication or library metadata rewrite performed.
 Guides: docs/CONTAINERS.md, docs/TRUENAS.md, docs/REFERENCE.md. Use johnsmith in
 all documentation/examples, US English, no em dashes, no personal references in
 public guides. Nothing else started; paused for user's break.
+
+## 2026-10-30: NAS Compose switched to prebuilt GHCR image
+
+User returned and reported check-in is now building container; user removed macOS
+and Windows from active workflow. Read current workflow and preserved user's
+Linux-only changes. Updated compose.yaml to default ghcr.io/shunte88/bcfunl:latest
+and removed local build/additional VCW context entirely. BCFUNL_IMAGE remains an
+override for a pinned commit/digest. Updated .env.example to concrete published
+image, removed unused BCFUNL_VCW_SOURCE. Preserved user's current example staging
+/mnt/backup/bcfstag3 and music /mnt/tankn4/music, UID/GID, mounts and protection.
+Updated docs/CONTAINERS.md from build to pull instructions, removed NAS-side VCW
+requirement and stale macOS/Windows active-matrix claims. Existing .env may still
+override image to bcfunl:local; user must update/remove that override if present.
+
+Validated docker compose config as JSON: exact default image, no build section,
+preserved mount/user settings and explicit image override. No Rust changes,
+release remains v0.1.26. No actual pull/container launch performed here; Docker
+daemon access remains unavailable. User reports remote build underway, not yet
+verified by agent. Memory and status saved; no production data/jobs changed.
+
+## Audio read retry and validation phase breakdown (v0.1.27)
+
+User successfully deployed GHCR image through Dockge. Initial empty-dependency
+error cleared by fresh stack; missing container-state bind directory created.
+Default image help/exit0 is expected one-shot behavior. Acquisition first failed
+/state/Downloads write permissions; after ownership correction all5 acquisitions
+succeeded (MONO OATH, EMIKA Fountain Immersive, Martin Stephenson Cuckoos,
+MONO Snowdrop, bvdub/Brock Van Wey Farewell). Cookies worked throughout.
+
+NAS-local process on imagev0.1.26:3 published,2 failed source decode (MONO OATH
+track10, Cuckoos track07) in temporary extracted files. Published destinations
+use /mnt/tankn4/F8NAS1/music; staging /mnt/backup/bcfstag3. Publication measured
+5–15ms; copy_tag_verify dominated52–188sec under5 concurrent releases.
+Cuckoos original ZIP passes7z t; extracted track07 passes flac -t. Host and
+container ffmpeg decode same copy successfully with identical PCM SHA256:
+6935e16d4779d1a126264a81e93a6f99c0f90d02a9b328353015a4ecdbf4e30b.
+A single-release processing retry published Cuckoos successfully in51.039sec,
+47.541sec copy_tag_verify. Earlier transient cause remains unproven. MONO OATH
+has not been confirmed successful by user yet. No evidence of archive corruption
+or deterministic decoder incompatibility from these tests.
+
+User requested bounded retry plus investigation of47sec validation. Added
+retry_audio around read-only pcm_hash: one fresh subprocess retry after200ms,
+cooperative cancellation, max2 attempts. Persistent read/decode failures still
+error; successful unequal hashes still error without retry; writes/publication
+not retried. Applied to both existing comparisons and prepared-audio validation.
+No validation weakening or tolerance of malformed input.
+
+copy_tag_verify now reports6 aggregate --timings components, also on failure:
+copy, write_tags, source_pcm_hash, destination_pcm_hash, tag_readback, file_sync.
+Hashing includes layout probes and retries. Current implementation decodes each
+track twice into pcm_f64le for SHA256, so actual cost depends on audio duration/
+resolution and hardware, not archive bytes. Need real NAS subphase timings to
+locate47sec; no promise of full-album verification within seconds. Refactored
+FLAC tag readback to export native comments directly without redundant ffprobe;
+shared tag alias/multivalue normalization retained. Other formats unchanged.
+Source/destination PCM verification remains mandatory.
+
+Tests: transient failure succeeds on2nd, persistent failure stops after2 with
+cause retained, success no retry; fast FLAC tags equal full-reader tags.111 tests
+passed +one parent fixture ignored; fmt, strict Clippy and optimized offline
+release build passed. Disposable synthetic FLAC publication/validation smoke
+verified all6 timing fields (copy0s/write_tags0.103s/source_hash0.102s/dest_hash
+0.101s/readback0.051s/fsync0s). Tiny local fixture, not NAS benchmark.
+bcfunl v0.1.27 (built 2026-10-30T21:39:47Z). docs/REFERENCE.md updated. Memory/status saved.
+No production files/history changed, no live NAS processing or image deployment
+performed by agent. Updated image requires user's next successful push build.
+Next: profile a NEW/unprocessed release (Cuckoos now quick-skips), inspect6 totals,
+and test bounded retry as needed; don't conclude parallelism/hardware caused
+the earlier glitch without evidence. Public docs retain johnsmith/US English/
+no em dash. Dockge image support and current user-edited paths preserved.
+
+## Latest handoff: ready for v0.1.27 acceptance test
+
+User requested memory/status saved before testing. Current local binary is
+bcfunl v0.1.27 (built2026-10-30T21:39:47Z). Bounded read-only audio validation
+retry: max2 attempts,200ms pause, cancellation respected. Persistent errors or
+unequal decoded hashes still block publication. --timings now separates copy,
+write_tags, source_pcm_hash, destination_pcm_hash, tag_readback and file_sync.
+FLAC tag readback avoids redundant ffprobe while retaining normalization.
+
+111 tests passed, one parent fixture ignored; formatting, strict Clippy,
+optimized release build and disposable FLAC/profile/publication smoke passed.
+Actual NAS47sec phase still requires component timing evidence. Earlier
+Cuckoos decode glitch did not recur on user retry; valid archive/FLAC and equal
+host/container PCM hashes recorded above. MONO OATH success still unconfirmed.
+
+Next action belongs to user: successful check-in image build, pull/redeploy
+GHCR latest in Dockge, verify --version reportsv0.1.27, then run --timings on an
+unprocessed release. Cuckoos is already completed and normally skips. Examine
+component totals before changing hash strategy or verification policy. No
+production data/history changes, live processing, cleanup or registry push
+performed by agent. No further work started; waiting for test results.

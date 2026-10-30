@@ -8,8 +8,8 @@ existing music-library copies.
 
 ## Configure
 
-Keep the sibling `../vcw` checkout beside this repository. The image copies only
-its metadata/types crates and workspace manifest, then builds bcfunl from source.
+Compose uses the prebuilt `ghcr.io/shunte88/bcfunl:latest` image. No local
+compilation, Rust installation, or sibling VCW checkout is required on the NAS.
 The final Linux image contains aria2c, 7z, ffmpeg, ffprobe, metaflac, gzip,
 sha256sum, flock, SQLite and CA certificates. Cookies, music, staging history,
 and resource databases are not baked into the image.
@@ -29,7 +29,7 @@ BCFUNL_GID=1000
 BCFUNL_STAGING=/mnt/backup
 BCFUNL_MUSIC=/mnt/tankn4/music
 BCFUNL_COOKIES=./bandcamp.cookies.txt
-BCFUNL_VCW_SOURCE=../vcw
+BCFUNL_IMAGE=ghcr.io/shunte88/bcfunl:latest
 ```
 
 Both datasets and the cookie file must already exist and be accessible to that
@@ -58,11 +58,11 @@ The image includes the optional sqlite3 command for migration/manual inspection.
 Mount sources and targets use the same NAS-local paths; no client NFS mount or
 container path aliases are needed.
 
-## Build and check
+## Pull and check
 
 ```sh
 docker compose config --quiet
-docker compose build
+docker compose pull bcfunl
 docker compose run --rm bcfunl --version
 ```
 
@@ -73,8 +73,8 @@ bcfunl. Use the printed version to confirm the deployed image is current.
 ## Use a published image
 
 After a successful GitHub workflow, the image is available as
-`ghcr.io/<repository-owner>/<repository-name>:sha-<full-commit-sha>`. All native
-matrix builds must pass before image publication begins. The publication job
+`ghcr.io/shunte88/bcfunl:sha-<full-commit-sha>`. The Linux build
+must pass before image publication begins. The publication job
 builds and smoke-tests its image before pushing. Default-branch builds also
 update `latest`; other branches never move that tag. Image publication is not
 gated on a version change. The initial image targets Linux amd64 for an x64 NAS.
@@ -82,10 +82,10 @@ gated on a version change. The initial image targets Linux amd64 for an x64 NAS.
 Set `BCFUNL_IMAGE` in `.env` to the published tag, for example:
 
 ```dotenv
-BCFUNL_IMAGE=ghcr.io/your-account/bcfunl:latest
+BCFUNL_IMAGE=ghcr.io/shunte88/bcfunl:latest
 ```
 
-Then pull instead of building on the NAS:
+Pull the image before the next run to pick up a newly published `latest`:
 
 ```sh
 docker compose pull bcfunl
@@ -94,8 +94,9 @@ docker compose run --rm bcfunl --version
 
 For a predictable deployment, use a commit tag or the registry's image digest
 instead of `latest`. Keep Compose, `.env`, `data/`, and the mounted credentials
-and datasets configured as above. A sibling VCW checkout is needed only when
-building an image locally, not when pulling one. If the registry package is
+and datasets configured as above. Compose has no local build configuration.
+If an existing `.env` sets `BCFUNL_IMAGE=bcfunl:local`, remove or update that
+setting; environment overrides take precedence over the default. If the registry package is
 private, sign in with `docker login ghcr.io` using an account/token with package
 read access, or deliberately make the package public in its GitHub settings.
 The workflow publishes using its repository-scoped `GITHUB_TOKEN`; no Docker Hub
@@ -158,11 +159,9 @@ does not audit or remove hundreds of older payloads.
 ## Push builds
 
 The GitHub Actions workflow runs on every push and manual dispatch, independent
-of version changes. It packages Linux x64, macOS ARM64, and Windows x64 native
-executables with mapping files and documentation. macOS uses exclusive directory
-reservation for publication. Native Windows currently supports downloads and
-resources; processing/cleanup explicitly directs users to the Linux container.
-This is not a claim of full native Windows processing support.
+of version changes. It currently packages a Linux x64 executable and publishes
+the Linux image with mapping files and runtime tooling. macOS and Windows jobs
+have been removed from the active build matrix.
 
 The workflow checks out `shunte88/vcw` alongside this repository. If that
 repository is private, configure a read-only `VCW_READ_TOKEN` Actions secret with
@@ -173,5 +172,5 @@ still produce distinct packages. Each artifact contains a tar.gz archive to
 preserve Unix executable permissions. Tools required by native binaries are installed
 separately; the Linux container includes them.
 
-Image execution needs a working Docker daemon and dataset access. Hosted matrix
-builds need a GitHub push; neither is implied by local configuration validation.
+Image execution needs a working Docker daemon and dataset access. A successful
+image pull does not by itself verify dataset permissions or processing.

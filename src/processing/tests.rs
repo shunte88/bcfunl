@@ -1523,3 +1523,47 @@ fn limited_process_cleanup_does_not_walk_or_clean_unrelated_history() {
     assert_eq!(rows[0][0].as_deref(), Some("new"));
     assert_eq!(rows.len(), 1);
 }
+
+#[test]
+fn audio_read_retry_is_bounded_and_preserves_success_or_failure() {
+    let mut attempts = 0;
+    let result = retry_audio(Path::new("fixture.flac"), || {
+        attempts += 1;
+        if attempts == 1 {
+            anyhow::bail!("transient read");
+        }
+        Ok("verified")
+    })
+    .unwrap();
+    assert_eq!(result, "verified");
+    assert_eq!(attempts, 2);
+    attempts = 0;
+    let error = retry_audio::<()>(Path::new("fixture.flac"), || {
+        attempts += 1;
+        anyhow::bail!("persistent decoder error");
+    })
+    .unwrap_err();
+    assert_eq!(attempts, 2);
+    assert!(format!("{error:#}").contains("persistent decoder error"));
+    assert!(format!("{error:#}").contains("after 2 attempts"));
+    attempts = 0;
+    retry_audio(Path::new("fixture.flac"), || {
+        attempts += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn fast_flac_tag_readback_matches_full_reader() {
+    let (_root, path) = fixture("flac");
+    let mut tags = sample();
+    tags.insert("GENRE".into(), vec!["Ambient;Electronic".into()]);
+    tags.insert("PERFORMER".into(), vec!["Romy".into(), "Peaches".into()]);
+    tagging::write(&path, &tags).unwrap();
+    assert_eq!(
+        tagging::read_tags(&path).unwrap(),
+        tagging::read(&path).unwrap().0
+    );
+}
