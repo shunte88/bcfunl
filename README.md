@@ -12,7 +12,7 @@ of what is complete.
 - **Repeatable collection downloads.** SQLite history tracks successes and failures so later runs can focus on unfinished purchases.
 - **A verified music library.** Clean up tags and filenames, preserve artwork, and verify decoded audio before publishing releases.
 - **Parallel downloads and processing.** Run 2–8 releases at a time.
-- **Better metadata.** Apply artist mappings, extract catalog numbers, and fill missing genres from a local Discogs research library.
+- **Better metadata.** Apply artist mappings, extract catalog numbers, filter invalid genre tags, and fill missing genres from a local Discogs research library.
 - **Scheduled maintenance.** Acquire, process, and clean successful downloads in one serialized workflow.
 
 ## Overview

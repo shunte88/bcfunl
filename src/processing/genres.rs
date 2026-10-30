@@ -49,7 +49,7 @@ impl Library {
         // Use the five strongest classifications rather than an artist's whole career vocabulary.
         let evidence=self.db.query("SELECT genre,master_count FROM artist_genres WHERE artist_id=? ORDER BY master_count DESC,genre COLLATE NOCASE LIMIT 5", &[id])?;
         let values: Vec<_> = evidence.iter().filter_map(|row| row[0].clone()).collect();
-        let mut genres = vcw_metadata::Genres::builtin().normalize_all(&values);
+        let mut genres = crate::genres::normalize(&values, &[artist.to_owned()]);
         genres.truncate(5);
         if genres.is_empty() {
             eprintln!("  Genre fallback unresolved: no master evidence for {artist}");
@@ -131,7 +131,7 @@ pub(super) mod tests {
         assert!(!tracks[0].tags.contains_key("BCFUNL_GENRE_SOURCE"));
         assert_eq!(
             tracks[1].tags["GENRE"],
-            ["Electronic", "Ambient", "Techno", "IDM", "Drone"]
+            ["Electronic", "Ambient", "Techno", "Idm", "Drone"]
         );
         assert_eq!(audit["tracks"].as_array().unwrap().len(), 1);
         assert_eq!(audit["artist_id"], "1");

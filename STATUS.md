@@ -1,7 +1,7 @@
 # Project Status
 
-Updated: 2026-10-28 (America/New_York)
-Local release: **v0.1.23**, Ombra International catalog-title handling
+Updated: 2026-10-29 (America/New_York)
+Local release: **v0.1.24**, genre capture and processing hygiene
 
 ## Current outcome
 
@@ -882,3 +882,77 @@ one parent fixture ignored; formatting, strict all-target Clippy and optimized
 offline release build passed. Processing test checks preserved album name,
 country/catalog template suffixes, tag fields and confirmed-catalog precedence.
 No production files/history changed, no NAS deployment or live processing run.
+
+## 2026-10-29: genre capture/processing hygiene (v0.1.24)
+
+User reported server genre vocabulary grew from ~720 curated values to3000+
+after processing. Confirmed cause in current code: Bandcamp captured free tags
+excluding locations, and shared VCW normalization intentionally passed unknown
+values through. No live Discogs release confirmation pipeline exists. User
+requested rejecting numbers, mixed words/numbers, band names, single characters,
+and applying initcap.
+
+Added src/genres.rs wrapping the existing VCW expansion table (OnceLock, no new
+dependencies or VCW edits). Semicolon inputs are split; input/output checks
+reject any Unicode numeric character and fewer than two alphabetic characters.
+Reject artist-map names and case/punctuation-insensitive known artist credits.
+Apply title casing via lowercasing then existing initcap, first-seen deduplication.
+Examples: AMBIENT -> Ambient, post-punk -> Post-Punk, IDM -> Idm per initcap policy;
+80s/2-step/etc rejected even if they could have expanded through genre map.
+
+Capture collects known artist from collection SQLite plus public page artist
+selectors, retains existing location exclusion, then filters/normalizes before
+saving. Processing applies same checks to embedded + release genres, using
+release/album artist, track artists, performers and remixers. When nothing valid
+remains, remove GENRE rather than retaining the old invalid tag, allowing missing-
+genre fallback. Research fallback uses same hygiene before assignment. Raw
+Discogs imports remain unchanged as evidence. Unknown alphabetic words and
+unrelated bands not known through credits or artist map can still remain;
+this is not a curated allowlist or Discogs release confirmation.
+
+README highlights, docs/REFERENCE.md and tag skill reference updated. Tests cover
+numeric/Unicode numeric/mixed tokens, single letters/punctuation, artist/map
+names, page/storefront artist exclusions, title casing, map expansion and removal
+of fully rejected existing genres. Adjusted expected genre case in prior tests.
+106 tests passed, one parent fixture ignored; formatting, strict offline all-target
+Clippy and optimized offline release build passed. bcfunl v0.1.24 (built 2026-10-30T01:04:26Z).
+
+Existing published server files and staging history were not bulk modified.
+New hygiene applies to recapture and future processing; already-published folders
+still skip. Remediation of the existing server's expanded genre vocabulary is
+separate pending work. No production cleanup/deployment or live provider request.
+
+## 2026-10-29: VCW genre review and break handoff
+
+User asked whether existing genre sanitization from VCW was fully implemented.
+Read-only inspection confirmed VCW Genres::normalize_all performs alias expansion,
+semicolon splitting and first-seen case-insensitive deduplication; unknown values
+pass through unchanged by design. Its built-in genre.dat has639 mapping rows
+and is byte-identical to /data2/vripr/assets/genre.dat. VRipr sanitize_genres
+also preserves unknowns. Neither implementation rejects numbers, mixed numeric
+terms, artist/band names or single letters. VCW exposes custom table loading;
+bcfunl currently uses the built-in table only. VCW Discogs provider merges actual
+genres+styles before normalization; bcfunl previously fed arbitrary Bandcamp
+tags through the normalizer during processing, while capture stored them raw
+apart from location filtering. No live Discogs release confirmation is wired
+into bcfunl. No VCW/VRipr files changed during inspection.
+
+Current release remains v0.1.24. New local genre hygiene wraps, rather than
+replaces, VCW mapping: rejects Unicode numeric characters and fewer than two
+letters, excludes known release/track credit and artist-map names, title-cases
+and deduplicates valid values. Applied at capture, processing, research fallback.
+Unknown alphabetic words and unrelated unknown band names may remain. Restricting
+to the user's approximately720 curated genres requires a supplied allowlist or
+other explicit vocabulary policy; that curated list has not been inspected.
+No allowlist or live Discogs confirmation implemented. Existing published server
+files are unchanged and still skip processing; repairing their3000+ vocabulary
+is separate work, not authorized or executed as a bulk modification here.
+
+Last validation:106 tests passed, one parent fixture ignored, formatting, strict
+all-target offline Clippy and optimized offline release build passed for v0.1.24.
+This VCW inspection was read-only, with no additional code changes/tests. User
+requested memory/status saved and a break. Stop here. No production download,
+processing, cleanup, deployment, provider query or library retagging started.
+Next session: await user's direction on curated vocabulary and/or acceptance
+of v0.1.24. Preserve US English, no em dashes, johnsmith in all documentation
+examples. Existing TrueNAS deployment and sequential workflow remain pending.

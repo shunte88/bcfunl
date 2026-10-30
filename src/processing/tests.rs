@@ -75,7 +75,7 @@ fn processing_normalizes_combined_genres_with_shared_map() {
     assert_eq!(
         tracks[0].tags["GENRE"],
         [
-            "Synth-pop",
+            "Synth-Pop",
             "Unmapped Example",
             "Electronic",
             "Acid House",
@@ -93,7 +93,7 @@ fn processing_normalizes_combined_genres_with_shared_map() {
     assert_eq!(
         tracks[0].tags["GENRE"],
         [
-            "Synth-pop",
+            "Synth-Pop",
             "Unmapped Example",
             "Electronic",
             "Acid House",
@@ -1105,7 +1105,7 @@ fn processing_missing_genres_publishes_verified_fallback_and_audit_without_promo
     let published = tracks(&paths).unwrap();
     assert_eq!(
         published[0].tags["GENRE"],
-        ["Electronic", "Ambient", "Techno", "IDM", "Drone"]
+        ["Electronic", "Ambient", "Techno", "Idm", "Drone"]
     );
     assert!(published[0].tags.contains_key("BCFUNL_GENRE_SOURCE"));
     assert_eq!(
@@ -1381,4 +1381,33 @@ fn ombra_catalog_only_album_keeps_title_and_formats_country_and_catalog() {
         );
         assert_eq!(value(&tracks[0].tags, "CATALOGNUMBER"), code);
     }
+}
+
+#[test]
+fn processing_removes_rejected_existing_genres_instead_of_leaving_old_tags() {
+    let mut r = release(PathBuf::from("unused.flac"));
+    r.genre = "123;80s;Romy;x;Other Band".into();
+    let mut tags = sample();
+    put(&mut tags, "GENRE", "2026;TECHNO2;Romy;!");
+    put(&mut tags, "PERFORMER", "Other Band");
+    let mut tracks = vec![Track {
+        path: r.source.clone(),
+        tags,
+        duration: 0.15,
+    }];
+    prepare_tags(
+        &r,
+        &mut tracks,
+        &template::Template::new(template::DEFAULT).unwrap(),
+    )
+    .unwrap();
+    assert!(!tracks[0].tags.contains_key("GENRE"));
+    r.genre = "AMBIENT;ambient;post-punk".into();
+    prepare_tags(
+        &r,
+        &mut tracks,
+        &template::Template::new(template::DEFAULT).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(tracks[0].tags["GENRE"], ["Ambient", "Post-Punk"]);
 }

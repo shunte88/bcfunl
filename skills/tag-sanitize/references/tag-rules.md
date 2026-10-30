@@ -196,3 +196,26 @@ placeholders still apply, for example
 Do not infer country from this label rule. Original captured titles remain
 unchanged; existing saved titles refresh through collection recapture, and
 already-published files are not renamed automatically.
+
+### Genre hygiene
+
+Apply the shared bcfunl genre hygiene rules during Bandcamp capture, processing,
+and artist-level research fallback. Reject values containing any numeric
+character, including mixed words/numbers; reject values with fewer than two
+alphabetic characters; reject names matching known release artists, credited
+performers/remixers, or the explicit artist map. Name comparisons ignore case
+and punctuation. Bandcamp location-tag exclusions remain in place.
+
+Filter individual semicolon-separated inputs before VCW mapping, then validate
+mapped outputs again. Retained values use title case, including hyphenated words,
+and case-insensitive deduplication in first-seen order. Examples: `AMBIENT`
+becomes `Ambient`, `post-punk` becomes `Post-Punk`; numeric descriptions such as
+`80s` and `2-step` are rejected under this policy. If every existing value is
+rejected, remove GENRE so the existing missing-genre fallback can apply.
+
+These checks do not constitute live Discogs release confirmation or a fixed
+curated genre vocabulary. Unknown alphabetic terms and unrelated artist names
+not present in known credits/the artist map can remain. Existing published
+library files are not rewritten automatically; use a fresh destination when
+validating new tagging behavior. Raw Discogs research imports remain evidence;
+fallback values are filtered when applied to tracks.

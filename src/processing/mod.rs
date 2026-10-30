@@ -453,7 +453,6 @@ fn prepare_tags(
     for track in tracks.iter() {
         *totals.entry(disc_number(track)?).or_default() += 1;
     }
-    let genre_map = vcw_metadata::Genres::builtin();
     for track in tracks {
         let disc = disc_number(track)?;
         let number = track_number(track)?;
@@ -543,15 +542,30 @@ fn prepare_tags(
         if value(tags, "DATE").is_empty() {
             put(tags, "DATE", &release.publish);
         }
-        let genres = genre_map.normalize_all(
+        let mut known_artists = vec![release.artist.clone(), artist.clone()];
+        for key in [
+            "ARTIST",
+            "ALBUMARTIST",
+            "TRACKARTIST",
+            "PERFORMER",
+            "REMIXER",
+        ] {
+            for name in tags.get(key).into_iter().flatten() {
+                known_artists.extend(credits::artist_names(name));
+            }
+        }
+        let genres = crate::genres::normalize(
             tags.get("GENRE")
                 .into_iter()
                 .flatten()
                 .map(String::as_str)
                 .chain(std::iter::once(release.genre.as_str())),
+            &known_artists,
         );
         if !genres.is_empty() {
             tags.insert("GENRE".into(), genres);
+        } else {
+            tags.remove("GENRE");
         }
         if artist.eq_ignore_ascii_case("Various Artists") {
             put(tags, "COMPILATION", 1);

@@ -35,7 +35,7 @@ pub(crate) fn country(value: &str) -> Option<&'static str> {
     })
 }
 
-fn extract(html: &str) -> (Option<String>, Option<&'static str>) {
+fn extract_for(html: &str, artists: &[String]) -> (Option<String>, Option<&'static str>) {
     let doc = Html::parse_document(html);
     let location = doc
         .select(&Selector::parse("#band-name-location .location").unwrap())
@@ -90,17 +90,38 @@ fn extract(html: &str) -> (Option<String>, Option<&'static str>) {
             tags.push(tag);
         }
     }
+    let mut artists = artists.to_vec();
+    for element in doc.select(
+        &Selector::parse("#band-name-location .title, #name-section .from a, #name-section h3 a")
+            .unwrap(),
+    ) {
+        artists.push(element.text().collect::<String>());
+    }
+    let tags = crate::genres::normalize(&tags, &artists);
     let genre = (!tags.is_empty()).then(|| tags.join(";"));
     (genre, country_iso)
 }
 
 pub fn store(db: &Database, user: &str, key: &str, html: &str) -> Result<()> {
-    let (genre, country_iso) = extract(html);
+    let artists = db
+        .query(
+            "SELECT artist FROM releases WHERE user=? AND item_key=?",
+            &[user, key],
+        )?
+        .into_iter()
+        .filter_map(|row| row.into_iter().next().flatten())
+        .collect::<Vec<_>>();
+    let (genre, country_iso) = extract_for(html, &artists);
     db.query(
         "UPDATE releases SET genre=NULLIF(?,''),country_iso=NULLIF(?, '') WHERE user=? AND item_key=?",
         &[genre.as_deref().unwrap_or_default(), country_iso.unwrap_or_default(), user, key],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+fn extract(html: &str) -> (Option<String>, Option<&'static str>) {
+    extract_for(html, &[])
 }
 
 #[cfg(test)]
@@ -115,7 +136,7 @@ mod tests {
         <a class="tag location-tag">London</a></div><a class="tag">unrelated</a>"#;
         assert_eq!(
             extract(html),
-            (Some("electronic;ambient".into()), Some("GB"))
+            (Some("Electronic;Ambient".into()), Some("GB"))
         );
         assert_eq!(
             extract("<div id='band-name-location'><span class='location'>London</span></div>"),
@@ -137,15 +158,28 @@ mod tests {
             extract(
                 "<div id='band-name-location'><span class='location'>London, United Kingdom</span></div><div class='tralbum-tags'><a class='tag'>London</a><a class='tag'>post-punk</a></div>"
             ),
-            (Some("post-punk".into()), Some("GB"))
+            (Some("Post-Punk".into()), Some("GB"))
         );
         assert_eq!(
             extract("<div class='tralbum-tags'><a class='tag'>ambient</a></div>"),
-            (Some("ambient".into()), None)
+            (Some("Ambient".into()), None)
         );
         assert_eq!(country("Germany"), Some("DE"));
         assert_eq!(country("Japan"), Some("JP"));
         assert_eq!(country("unknown"), None);
+    }
+
+    #[test]
+    fn capture_filters_numeric_artist_and_single_character_tags() {
+        let html = r#"<div id="band-name-location"><span class="title">Other Band</span></div>
+        <div class="tralbum-tags"><a class="tag">2026</a><a class="tag">80s</a>
+        <a class="tag">techno2</a><a class="tag">x</a><a class="tag">!</a>
+        <a class="tag">The Black Dog</a><a class="tag">Other-Band</a>
+        <a class="tag">AMBIENT</a><a class="tag">ambient</a><a class="tag">post-punk</a></div>"#;
+        assert_eq!(
+            extract_for(html, &["The Black Dog".into()]).0.as_deref(),
+            Some("Ambient;Post-Punk")
+        );
     }
 
     #[test]
@@ -160,7 +194,7 @@ mod tests {
             )
             .unwrap()[0],
             vec![
-                Some("ambient".into()),
+                Some("Ambient".into()),
                 Some("JP".into()),
                 Some("completed".into()),
                 Some("3".into())

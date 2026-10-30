@@ -2,6 +2,7 @@ mod aria2;
 mod collection;
 mod db;
 mod download;
+mod genres;
 mod metadata;
 mod net;
 mod processing;
