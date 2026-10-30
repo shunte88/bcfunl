@@ -1602,3 +1602,36 @@ branches publish commit tag, only default publishes latest. No Rust/runtime
 changes; release remains v0.1.26. Docker daemon inaccessible here, actual image
 build/run/push and macOS/Windows hosted gates remain unverified until user push.
 Memory/status saved. No production files/history or active jobs touched.
+
+## Break handoff, 2026-10-30
+
+User requested memory/status saved and a break. Stop work here.
+Current local release v0.1.26 (built2026-10-30T15:50:38Z). User's confirmed
+media2026 executable was v0.1.24, so their MONO EINVAL test did not exercise
+v0.1.25's NFS fallback. No active user batch was interrupted or modified.
+
+Latest local changes: processing --timings, local ZIP extraction, early count
+stop, scoped combined cleanup, clearer decode path diagnostics, NAS-local
+Docker Compose and every-push native/image build workflow. NAS final paths are
+/mnt/backup staging and /mnt/tankn4/music landing. Migration SQL updates old
+media2026 payload/published path prefixes transactionally; no live DB migrated.
+Native Windows processing/cleanup remain unsupported, use Linux container;
+native downloads/resources enabled. Linux/macOS processing paths prepared.
+
+Local gates passed:109 tests + parent-invoked fixture, fmt, strict Clippy, release
+build, wrapper/migration tests, Compose configuration, workflow YAML and branch
+publication mock checks, minimal build context resolution, disposable FLAC
+profile/publication smoke. Actual Docker daemon unavailable here. No image run,
+registry push or GitHub matrix run verified. Container image publish job waits
+for all OS builds and its own smoke check, publishes ghcr.io/<owner>/<repo>:
+sha-<full SHA>, updates latest only for default branch. BCFUNL_IMAGE can select
+published image, avoiding NAS-side build. Private VCW needs VCW_READ_TOKEN;
+package visibility/read access may need account configuration after first push.
+
+Next when user returns: await performance acceptance results or first workflow/
+container run; investigate actual timing/CI errors as supplied. Do not claim all
+platform/image gates green before hosted execution. No deployment, production
+processing/cleanup, registry publication or library metadata rewrite performed.
+Guides: docs/CONTAINERS.md, docs/TRUENAS.md, docs/REFERENCE.md. Use johnsmith in
+all documentation/examples, US English, no em dashes, no personal references in
+public guides. Nothing else started; paused for user's break.
