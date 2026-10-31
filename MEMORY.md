@@ -1,3 +1,10 @@
+## Next-session reminder: acquire limit
+
+On 2026-10-31 (America/New_York), remind the user that the acquire cron job is
+still capped at `--count 100`. Review whether to raise or remove that limit.
+Do not change it automatically. No proactive notification was scheduled because
+this session has no general reminder/scheduling tool.
+
 # Project Memory
 
 Updated: 2026-10-25
@@ -1728,3 +1735,80 @@ unprocessed release. Cuckoos is already completed and normally skips. Examine
 component totals before changing hash strategy or verification policy. No
 production data/history changes, live processing, cleanup or registry push
 performed by agent. No further work started; waiting for test results.
+
+## Break handoff: NAS acceptance and cron jobs defined
+
+User confirmed v0.1.27 container acquisition of5 new releases succeeded. Process
+then attempted5 (including previously failed MONO OATH), published5, skipped4,
+failed0; cleanup removed exactly5 successful archives, retained0. Exit0.
+MONO OATH now successfully published. No retry messages appear in supplied log;
+success with retry enabled does not prove retries were exercised or explain the
+prior transient decode glitches.
+
+Real NAS timings now isolate the bottleneck: source/destination PCM hashes total
+about66sec for Songs Of Sunderland,96sec American Dub Electronics,137sec From
+The Roots Discomix,140sec Glory Be,211sec OATH. They dominate roughly90–94% of
+copy_tag_verify. Copying about0.9–2.8sec, tag writes3.1–9.3sec, readback0.4–0.6sec,
+fsync0.6–2.9sec. Publication3–12ms, cleanup11ms, processing wall242.961sec with
+5 releases overlapping. Full decoded hashing, not publication/history checks,
+is the measured slow phase. CPU vs storage/concurrency contribution not proven;
+no hash-strategy change or validation weakening implemented.
+
+User requested acquire/process be independently triggered. Explained two Dockge
+stacks using the same GHCR image, same staging/database and absolute host paths
+for cookies/data/state. Acquire command currently --count100. Process command
+uses --process --clean --parallel2 --summary --timings. Both are one-shot jobs;
+same staging lock prevents simultaneous acquire/process and a blocked job exits
+for next scheduled retry. No daemon/service scheduler added inside image.
+
+User says cron jobs now DEFINED on TrueNAS. Prior suggested commands cd to the
+actual Dockge stack folder then /usr/bin/docker compose run --rm -T bcfunl.
+Suggested acquire daily01:00, process hourlyminute20. Actual stack names, schedules,
+Docker permissions and first unattended cron executions have not been inspected;
+user's confirmation is of setup, not agent verification. Current observed NAS
+paths: staging /mnt/backup/bcfstag3 and music /mnt/tankn4/F8NAS1/music; preserve
+user-edited .env/configuration. No remote task changes made by agent.
+
+User requested reminder TOMORROW2026-10-31 America/New_York: acquisition remains
+limited to100 releases; review raising/removing --count100 after maintenance
+acceptance. Saved prominently at top of MEMORY.md/STATUS.md for next session.
+No general reminder tool available, so no proactive notification scheduled.
+Do not claim reminder delivery or silently change the limit. Current release
+v0.1.27; no code changes, build or new tests this turn. User requested a break:
+stop here, no further processing, deployment, cleanup or cron changes started.
+
+## 2026-10-31: rolling acquisition date window
+
+User now runs one container with acquire/process arguments; acquisition uses a
+rolling last-week window. Reviewed capture: inclusive UTC purchase-date matching
+was correct, but pagination only stopped at eligible count or collection end.
+Added before_purchase_window cutoff to collection_items older-page responses:
+whole nonempty page must have known purchase dates strictly before fromdt.
+Equality, mixed dates and unknown dates keep scanning. No cutoff for todt-only
+or no bounds, nor artist search (separate request). Initial profile cache is not
+used for cutoff because display can be curated. This relies on older-page API
+chronology, as existing pagination does. No arbitrary cursor jump implemented.
+Processing already uses bound optional >=/<= SQL predicates and DESC purchase
+order; unchanged. Count still limits unfinished eligible attempts, not inspected
+entries. User reminded of previous --count100; current deployed cap unverified.
+Tests112 passed, one fixture ignored; fmt and strict offline Clippy passed.
+No live authenticated scan or NAS container deployment performed. Release version
+unchanged at0.1.27. See later entry for optimized build result if needed.
+
+Optimized offline release build also passed for the rolling-window change.
+
+## 2026-10-31: v0.1.28 release gates green
+
+Bumped Cargo.toml and bcfunl entry in Cargo.lock from0.1.27 to0.1.28 for
+rolling purchase-window pagination cutoff. Binary verified:
+bcfunl v0.1.28 (built 2026-10-31T20:46:28Z).
+Validation:112 tests passed,0 failed,1 parent-invoked fixture ignored;
+cargo fmt --check; strict offline all-target Clippy; offline optimized build;
+maintenance shell syntax and maintenance/migration Python checks all passed.
+Date bounds remain inclusive UTC purchase dates. Rolling seven calendar dates
+including today uses fromdt=today minus6 days, todt=today. User confirmed their
+wrapper already uses this calculation. No wrapper, cron or NAS settings changed.
+No live authenticated pagination test, container build/pull/deploy, commit or push
+performed here. Existing GitHub push workflow must build the updated image before
+NAS rollout. Older-page chronology assumption remains as documented above.
+Memory and status saved after gates passed.

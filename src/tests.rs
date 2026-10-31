@@ -904,3 +904,27 @@ fn capture_only_admits_flagged_singles_with_strictly_past_dates() {
     assert_eq!(selected[0].key, "album0");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn older_collection_page_stops_only_strictly_before_purchase_window() {
+    let from = date(&json!("2026-10-24")).unwrap();
+    let old = json!({"purchased":"2026-10-23"});
+    assert!(before_purchase_window(
+        &[old.clone(), old.clone()],
+        Some(from)
+    ));
+    for item in [
+        json!({"purchased":"2026-10-24"}),
+        json!({"purchase_date":"2026-10-25"}),
+        json!({"purchased":"invalid"}),
+        json!({}),
+    ] {
+        assert!(!before_purchase_window(&[old.clone(), item], Some(from)));
+    }
+    assert!(before_purchase_window(
+        &[json!({"purchase_date":"2026-10-23"})],
+        Some(from)
+    ));
+    assert!(!before_purchase_window(&[old], None));
+    assert!(!before_purchase_window(&[], Some(from)));
+}

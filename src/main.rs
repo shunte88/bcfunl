@@ -316,6 +316,17 @@ fn capture_page(
     Ok(())
 }
 
+// Only paginated older items establish the cutoff; the profile cache may be curated.
+fn before_purchase_window(items: &[Value], from: Option<NaiveDate>) -> bool {
+    from.is_some_and(|from| {
+        !items.is_empty()
+            && items.iter().all(|item| {
+                metadata_date(item, &["purchased", "purchase_date"])
+                    .is_some_and(|purchase| purchase < from)
+            })
+    })
+}
+
 fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
     let data = net.page(&format!("https://bandcamp.com/{}", args.user))?;
     let fan = data.pointer("/fan_data/fan_id").context("Missing fan ID")?;
@@ -370,12 +381,13 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         let page =
             net.collection(&json!({"fan_id":fan,"count":100,"older_than_token":previous}))?;
         let before = seen.len();
+        let items = page["items"]
+            .as_array()
+            .context("Missing pagination items")?;
         capture_page(
             db,
             args,
-            page["items"]
-                .as_array()
-                .context("Missing pagination items")?,
+            items,
             &page["redownload_urls"],
             &mut seen,
             &mut selected,
@@ -383,6 +395,10 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         more = page["more_available"]
             .as_bool()
             .context("Missing more_available")?;
+        if before_purchase_window(items, args.fromdt) {
+            eprintln!("Stopped collection scan: page precedes --fromdt purchase window.");
+            break;
+        }
         token = page["last_token"].as_str().map(str::to_owned);
         if more
             && selected.len() < args.count.map(|n| n as usize).unwrap_or(usize::MAX)

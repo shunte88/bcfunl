@@ -784,3 +784,10 @@ FLAC tag readback uses native comments directly and avoids an unnecessary
 ffprobe duration/stream probe; the same alias/multivalue normalization is retained.
 This is a limited overhead reduction, not a measured guarantee that a full album
 will validate within a few seconds.
+
+Acquisition with `--fromdt` stops fetching older collection pages after a whole
+page has known purchase dates strictly before that date. The initial profile
+cache does not trigger this cutoff because collection displays can be curated.
+Pages with missing purchase dates keep scanning. `--todt` alone cannot stop an
+older-page scan early. Both bounds remain inclusive; `--count` limits eligible
+unfinished releases, not the number of collection entries inspected.
