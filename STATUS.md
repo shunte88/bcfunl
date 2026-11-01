@@ -1323,3 +1323,27 @@ No live authenticated pagination test, container build/pull/deploy, commit or pu
 performed here. Existing GitHub push workflow must build the updated image before
 NAS rollout. Older-page chronology assumption remains as documented above.
 Memory and status saved after gates passed.
+
+## 2026-11-01: staging lock recovery and scheduled-run handoff
+
+User has one parameterized container invocation supporting acquire/process.
+Deploying during acquisition was followed by a staging lock acquisition error.
+Reviewed src/staging.rs: .bcfunl-staging.lock uses File::try_lock, an OS-held
+lock, released when holders close/exit; existence of the file is not a stale
+lock indication. Do not delete it to bypass contention, which could allow
+concurrent jobs against different inodes.
+
+User checked NAS host docker ps: no bcfunl containers running (only unrelated
+services). fuser reported no holder for
+/mnt/backup/bcfstag3/.bcfunl-staging.lock. Host flock -n on that file succeeded
+and printed "Staging lock is free". Lock is available at time of test; original
+holder/cause not established and no subsequent job startup verified. No file
+deletions, process kills, container restarts, or environment changes by agent.
+
+User will let jobs run on schedule and remain hands off until schedule settles.
+Next session: review actual scheduled acquire/process logs and deployed version
+if provided; do not assume successful unattended runs from the lock test alone.
+Local release remains v0.1.28 with prior gates green. No code changes or new
+build/tests this session. Previous --count100 limit was mentioned; current
+configured cap still unverified. User requested memory/status saved and session
+ended. No further work or remote actions started.
