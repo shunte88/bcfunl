@@ -1836,3 +1836,56 @@ Local release remains v0.1.28 with prior gates green. No code changes or new
 build/tests this session. Previous --count100 limit was mentioned; current
 configured cap still unverified. User requested memory/status saved and session
 ended. No further work or remote actions started.
+
+## Session close: cron Docker permissions resolved, acquisition running
+
+User's TrueNAS scheduler jobs failed with EFAULT/exit1. Added persistent logs
+revealed Docker socket permission denied before container startup. User confirmed
+they had changed the cron execution user; switched both jobs to root. Container
+still runs as configured non-root UID/GID. No Docker socket chmod required.
+Earlier suspicion that compose run bypassed a command-based wrapper was not the
+cause: deployed wrapper is an entrypoint and correctly receives acquire/process.
+
+User supplied host ps output confirming root cron -> docker compose run --rm -T
+bcfunl acquire -> docker-init -> /app/bcfunl acquisition running under container
+user. Stack path /mnt/.ix-apps/app_mounts/dockge/stacks/bcfunl. This is a one-off
+Compose run container, so Dockge main service need not show running. Single
+service with parameterized entrypoint is working for launch; no split stacks
+needed. Acquisition completion and process success not yet confirmed.
+
+Deployed acquire wrapper currently uses --count100 --parallel8 --summary, with
+--fromdt and --todt commented out intentionally during troubleshooting. User will
+wait for completion, then restore dates. Thus current run has no date window.
+Wrapper shown computes TODT using date +%F and FROMDT using
+BCFUNL_ENDDT plus BCFUNL_WINDOW days ago; actual env values/timezone unverified.
+When restoring, preserve inclusive UTC semantics and seven-date window of today
+minus6 days through today. Earlier user confirmed intended math. Do not change
+live environment during this active run.
+
+Deployed process wrapper uses --process --clean --parallel8 --summary --timings,
+configured collection/staging/music/template variables and extra argument pass
+through. Logs /mnt/backup/bcfunl-acquire-cron.log and
+/mnt/backup/bcfunl-process-cron.log. ps shows scheduler adds > /dev/null after
+user's >>log 2>&1, so stdout may be discarded while stderr remains logged; avoid
+claiming full combined capture without checking scheduler output settings.
+
+Local release remains v0.1.28, previous validation gates green. No source edits,
+new tests/build, deployment, remote commands, or NAS data changes by agent this
+session. User requested memory/status saved and close until morning. Next:
+review completion logs, restore date flags after run, verify scheduled process
+result and deployed version if supplied. Leave jobs running without intervention.
+
+## Next session priority: performance and Symphonia evaluation
+
+User reports the job is still running and wants to identify the bottleneck next
+session. Explicit preference: bring in Symphonia for tag encode/decode work,
+following VCW, to simplify installation. Record as requested direction, not an
+implemented or verified capability. Inspect actual VCW usage and distinguish
+Symphonia audio decoding from tag reading/writing before choosing integration;
+do not assume Symphonia provides tag encoding. Profile active acquisition versus
+processing separately. Prior measured processing bottleneck was source/output
+PCM decoding and hashing, not tag writes; retain mandatory audio/tag verification
+and bounded retries. Determine whether native decoding can replace subprocesses
+without changing comparison semantics. No dependency/code changes requested for
+tonight. User says just make note and resume in the morning. Current job outcome
+remains unverified; no intervention or live environment changes made.

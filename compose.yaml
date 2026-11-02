@@ -1,20 +1,25 @@
 services:
   bcfunl:
     image: ${BCFUNL_IMAGE:-ghcr.io/shunte88/bcfunl:latest}
-    user: "${BCFUNL_UID:-1000}:${BCFUNL_GID:-1000}"
+    user: ${BCFUNL_UID:-1000}:${BCFUNL_GID:-1000}
     init: true
     working_dir: /app
     environment:
       HOME: /state
+      BCFUNL_WINDOW: ${BCFUNL_WINDOW:-7}
+      BCFUNL_COLLECTION: ${BCFUNL_COLLECTION:?Set BCFUNL_COLLECTION}
+      BCFUNL_STAGING: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
+      BCFUNL_MUSIC: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
+      BCFUNL_TEMPLATE: ${BCFUNL_TEMPLATE:?Set BCFUNL_TEMPLATE}
     volumes:
       - type: bind
-        source: ${BCFUNL_STAGING:?Set BCFUNL_STAGING to the existing absolute staging path}
-        target: ${BCFUNL_STAGING:?Set BCFUNL_STAGING to the existing absolute staging path}
+        source: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
+        target: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
         bind:
           create_host_path: false
       - type: bind
-        source: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC to the mounted absolute music path}
-        target: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC to the mounted absolute music path}
+        source: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
+        target: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
         bind:
           create_host_path: false
       - type: bind
@@ -32,3 +37,71 @@ services:
         target: /state
         bind:
           create_host_path: false
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >
+        mode="$${1:-}"
+
+        if [ "$$#" -gt 0 ]; then
+          shift
+        fi
+
+
+        case "$${mode}" in
+          acquire)
+            BCFUNL_TODT="$$(date +%F)"
+            BCFUNL_FROMDT="$$(date -d "$${BCFUNL_ENDDT} $${BCFUNL_WINDOW} days ago" +%F)"
+            export BCFUNL_FROMDT BCFUNL_TODT
+
+            echo "BCFunl :: Acquiring from $${BCFUNL_FROMDT} through $${BCFUNL_TODT}"
+
+              #--count 1000 \
+              #--fromdt "$${BCFUNL_FROMDT}" \
+              #--todt "$${BCFUNL_TODT}" \
+
+            # run with a fixed count - it will pick up new and unknown releases
+            # or once you have a repository cloned to your server use a small
+            # data window, here I'm using 7 days trailing to pickup new purchases
+            # pre-orderes that have hit their release date
+            #
+            exec /app/bcfunl \
+              --user "$${BCFUNL_COLLECTION}" \
+              --output "$${BCFUNL_STAGING}" \
+              --fromdt "$${BCFUNL_FROMDT}" \
+              --todt "$${BCFUNL_TODT}" \
+              --parallel 8 \
+              --summary \
+              "$$@"
+            ;;
+
+          process)
+            echo "BCFunl :: Processing staged releases"
+
+            # run and process all candidate releases
+            # process finalizes the release by adding
+            # detailed metadata and creating standard
+            # bamed folders and files for your collection
+            #
+            exec /app/bcfunl \
+              --process \
+              --user "$${BCFUNL_COLLECTION}" \
+              --output "$${BCFUNL_STAGING}" \
+              --serverdir "$${BCFUNL_MUSIC}" \
+              --parallel 8 \
+              --template "$${BCFUNL_TEMPLATE}" \
+              --summary \
+              --timings \
+              --clean \
+              "$$@"
+            ;;
+
+          *)
+            echo "Usage: bcfunl acquire|process [extra arguments]" >&2
+            exit 2
+            ;;
+        esac
+      - bcfunl
+    command:
+      - acquire
+networks: {}
