@@ -29,7 +29,7 @@ Run in the environment that will execute bcfunl:
 ```sh
 cd "$HOME/bcfunl" || exit 1
 ./bcfunl --version
-for tool in aria2c 7z ffprobe ffmpeg metaflac gzip sha256sum flock; do
+for tool in aria2c 7z gzip sha256sum flock; do
     command -v "$tool" || printf '%s: MISSING\n' "$tool"
 done
 ldd ./bcfunl

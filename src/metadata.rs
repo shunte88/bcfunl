@@ -97,7 +97,12 @@ fn extract_for(html: &str, artists: &[String]) -> (Option<String>, Option<&'stat
     ) {
         artists.push(element.text().collect::<String>());
     }
-    let tags = crate::genres::normalize(&tags, &artists);
+    let tags = crate::genres::normalize(
+        tags.iter()
+            .flat_map(|tag| tag.split(';'))
+            .filter(|tag| crate::genres::recognized(tag)),
+        &artists,
+    );
     let genre = (!tags.is_empty()).then(|| tags.join(";"));
     (genre, country_iso)
 }
@@ -201,5 +206,14 @@ mod tests {
             ]
         );
         assert!(db.completed("u", "k", false).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod curated_genre_tests {
+    #[test]
+    fn bandcamp_capture_drops_unknown_phrases_and_expands_ebm() {
+        let html = "<div class='tralbum-tags'><a class='tag'>EBM - electronic body music</a><a class='tag'>Some Made Up Genre Phrase</a><a class='tag'>IDM</a></div>";
+        assert_eq!(super::extract(html).0, Some("EBM;Electronic;IDM".into()));
     }
 }

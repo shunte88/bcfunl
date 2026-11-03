@@ -135,12 +135,15 @@ pub(crate) fn release_dates(item: &Value) -> Vec<chrono::NaiveDate> {
     .collect()
 }
 
-pub(crate) fn released_single(
+pub(crate) fn stale_prerelease(
     single: bool,
     dates: &[chrono::NaiveDate],
     today: chrono::NaiveDate,
 ) -> bool {
-    single && !dates.is_empty() && dates.iter().all(|date| *date < today)
+    !dates.is_empty()
+        && dates.iter().all(|date| {
+            *date < today && (single || today.signed_duration_since(*date).num_days() > 30)
+        })
 }
 
 #[cfg(test)]
@@ -149,11 +152,11 @@ mod preorder_tests {
     use chrono::NaiveDate;
     use serde_json::json;
     #[test]
-    fn stale_preorder_requires_single_track_and_all_dates_strictly_past() {
+    fn stale_preorder_allows_past_singles_or_releases_over_thirty_days_old() {
         let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         let past = today.pred_opt().unwrap();
         let future = today.succ_opt().unwrap();
-        assert!(released_single(true, &[past], today));
+        assert!(stale_prerelease(true, &[past], today));
         for dates in [
             vec![],
             vec![today],
@@ -161,9 +164,16 @@ mod preorder_tests {
             vec![past, today],
             vec![past, future],
         ] {
-            assert!(!released_single(true, &dates, today));
+            assert!(!stale_prerelease(true, &dates, today));
         }
-        assert!(!released_single(false, &[past], today));
+        assert!(!stale_prerelease(false, &[past], today));
+        let age30 = today - chrono::Duration::days(30);
+        let age31 = today - chrono::Duration::days(31);
+        assert!(!stale_prerelease(false, &[age30], today));
+        assert!(stale_prerelease(false, &[age31], today));
+        assert!(!stale_prerelease(false, &[age31, age30], today));
+        assert!(!stale_prerelease(false, &[age31, future], today));
+        assert!(!stale_prerelease(false, &[], today));
         assert_eq!(single_track(&json!({"type":"track"})), Some(true));
         assert_eq!(single_track(&json!({"trackinfo":[{}]})), Some(true));
         assert_eq!(single_track(&json!({"track_count":"1"})), Some(true));
@@ -175,6 +185,6 @@ mod preorder_tests {
         assert_eq!(single_track(&json!({"type":"album"})), None);
         let dates =
             release_dates(&json!({"release_date":"2026-10-27","album_release_date":"2026-10-29"}));
-        assert!(!released_single(true, &dates, today));
+        assert!(!stale_prerelease(true, &dates, today));
     }
 }

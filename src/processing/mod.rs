@@ -1,6 +1,8 @@
 //! Offline processing of owned downloads. Credit and native tag handling come from mcfunl.
 pub(crate) mod clean;
 mod credits;
+mod decoding;
+mod discogs;
 mod genres;
 mod tagging;
 pub(crate) mod tempfile;
@@ -8,6 +10,7 @@ mod template;
 
 use crate::{Args, aria2::ChildGuard, db::Database, shutdown};
 use anyhow::{Context, Result, bail, ensure};
+use rayon::prelude::*;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -190,88 +193,54 @@ fn measured<T>(
     result
 }
 fn pcm_hash_once(path: &Path) -> Result<String> {
-    let layout = command(
-        Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "a:0",
-                "-show_entries",
-                "stream=sample_rate,channels",
-                "-of",
-                "csv=p=0",
-            ])
-            .arg(path),
-    )
-    .with_context(|| format!("Inspect audio layout {}", path.display()))?;
-    ensure!(!layout.trim().is_empty(), "Missing audio stream layout");
-    let hash = command(
-        Command::new("ffmpeg")
-            .args(["-v", "error", "-xerror", "-nostdin", "-i"])
-            .arg(path)
-            .args([
-                "-map",
-                "0:a:0",
-                "-c:a",
-                "pcm_f64le",
-                "-f",
-                "hash",
-                "-hash",
-                "sha256",
-                "-",
-            ]),
-    )
-    .with_context(|| format!("Decode audio {}", path.display()))?;
-    Ok(format!("{}:{}", layout.trim(), hash.trim()))
+    decoding::pcm_hash(path).with_context(|| format!("Decode audio {}", path.display()))
 }
 
-fn write_container_tags(path: &Path, tags: &Tags) -> Result<()> {
-    let temp = tempfile::tempdir_in(path.parent().context("Audio parent")?)?;
-    let output = temp.path().join(format!("tagged.{}", extension(path)));
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-v", "error", "-xerror", "-nostdin", "-n", "-i"])
-        .arg(path)
-        .args(["-map", "0", "-c", "copy", "-map_metadata", "0"]);
-    for (key, vals) in tags {
-        ensure!(!key.contains(['=', '\0', '\r', '\n']), "Invalid tag key");
-        let separator = if key == "GENRE" { ";" } else { " / " };
-        cmd.arg("-metadata")
-            .arg(format!("{key}={}", vals.join(separator)));
-    }
-    match extension(path).as_str() {
-        "m4a" => {
-            cmd.args(["-movflags", "use_metadata_tags"]);
-        }
-        "aif" | "aiff" | "aifc" => {
-            cmd.args(["-write_id3v2", "1"]);
-        }
-        _ => {}
-    }
-    command(cmd.arg(&output))?;
-    fs::rename(output, path)?;
-    Ok(())
-}
 #[derive(Clone)]
 struct Track {
     path: PathBuf,
     tags: Tags,
     duration: f64,
 }
+// A shared bounded pool prevents release-level parallelism multiplying track workers.
+fn file_pool() -> Result<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<std::result::Result<rayon::ThreadPool, String>> =
+        std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1)
+                    .min(8),
+            )
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| anyhow::anyhow!("Create audio worker pool: {e}"))
+}
 fn tracks(paths: &[PathBuf]) -> Result<Vec<Track>> {
-    let mut result = Vec::new();
-    for path in paths.iter().filter(|p| audio(p)) {
-        let (tags, duration) =
-            tagging::read(path).with_context(|| format!("Read {}", path.display()))?;
-        result.push(Track {
-            path: path.clone(),
-            tags,
-            duration,
-        });
-    }
+    let paths: Vec<_> = paths.iter().filter(|p| audio(p)).collect();
+    let result = file_pool()?.install(|| {
+        paths
+            .par_iter()
+            .map(|path| {
+                shutdown::check()?;
+                let (tags, duration) =
+                    tagging::read(path).with_context(|| format!("Read {}", path.display()))?;
+                Ok(Track {
+                    path: (*path).clone(),
+                    tags,
+                    duration,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
     ensure!(!result.is_empty(), "No supported audio found");
     Ok(result)
 }
+
 fn common(tracks: &[Track], key: &str) -> Result<String> {
     let found: HashSet<_> = tracks
         .iter()
@@ -342,6 +311,7 @@ struct Plan {
     directory: PathBuf,
     files: Vec<PathBuf>,
     genre_fallback: Option<serde_json::Value>,
+    discogs_metadata: Option<serde_json::Value>,
 }
 fn prepare_tags(
     release: &Release,
@@ -395,21 +365,27 @@ fn prepare_tags(
         .map(|names| names[0].clone())
         .unwrap_or_else(|| crate::initcap(&artist));
     ensure!(!artist.is_empty(), "Missing album artist; requires review");
-    let released_single = tracks.len() == 1
-        && chrono::NaiveDate::parse_from_str(&release.publish, "%Y-%m-%d")
-            .is_ok_and(|date| date < chrono::Utc::now().date_naive());
-    if released_single {
+    let stale_prerelease = crate::collection::stale_prerelease(
+        tracks.len() == 1,
+        &chrono::NaiveDate::parse_from_str(&release.publish, "%Y-%m-%d")
+            .into_iter()
+            .collect::<Vec<_>>(),
+        chrono::Utc::now().date_naive(),
+    );
+    if stale_prerelease {
         for tag in ["ALBUM", "TITLE"] {
-            if let Some(values) = tracks[0].tags.get_mut(tag) {
-                for value in values {
-                    *value = crate::sanitizing::remove_prerelease(value);
+            for track in tracks.iter_mut() {
+                if let Some(values) = track.tags.get_mut(tag) {
+                    for value in values {
+                        *value = crate::sanitizing::remove_prerelease(value);
+                    }
                 }
             }
         }
     }
     let source_album = common(tracks, "ALBUM")?;
     let mut album = if source_album.is_empty() {
-        if released_single {
+        if stale_prerelease {
             crate::sanitizing::remove_prerelease(&release.album)
         } else {
             release.album.clone()
@@ -454,13 +430,33 @@ fn prepare_tags(
         }
     }
     let (cleaned, extracted_catalog) = crate::sanitizing::title(&album, &artist);
-    let catalog = if catalog.is_empty() {
+    let mut catalog = if catalog.is_empty() {
         extracted_catalog.unwrap_or_default()
     } else {
         catalog
     };
     album = crate::sanitizing::title_display(&credits::album_credit(&cleaned, &artist).0);
     ensure!(!album.is_empty(), "Missing album title; requires review");
+    let mut track_catalogs = BTreeMap::new();
+    for track in tracks.iter_mut() {
+        let (title, code) = crate::sanitizing::track_title(&value(&track.tags, "TITLE"), &album);
+        if let Some(code) = code {
+            let identity: String = code
+                .chars()
+                .filter(|c| !c.is_whitespace() && *c != '-')
+                .flat_map(char::to_lowercase)
+                .collect();
+            track_catalogs.entry(identity).or_insert(code);
+            put(&mut track.tags, "TITLE", title);
+        }
+    }
+    if catalog.is_empty() {
+        ensure!(
+            track_catalogs.len() <= 1,
+            "Conflicting catalogs in track-title decorations; requires review"
+        );
+        catalog = track_catalogs.into_values().next().unwrap_or_default();
+    }
     let decorated = format!(
         "{album}{}{}",
         if country.is_empty() {
@@ -516,13 +512,8 @@ fn prepare_tags(
             put(tags, "ARTIST", credited);
         }
         let mut track_artists = Vec::new();
-        if artist.eq_ignore_ascii_case("Various Artists") {
-            if let Some(values) = tags.get("ARTIST") {
-                for name in values {
-                    credits::append_names(&mut track_artists, name);
-                }
-            }
-        } else {
+        credits::append_names(&mut track_artists, &value(tags, "ARTIST"));
+        if track_artists.is_empty() && !artist.eq_ignore_ascii_case("Various Artists") {
             credits::append_names(&mut track_artists, &artist);
         }
         for name in &album_guests {
@@ -652,6 +643,7 @@ fn prepare_tags(
     }
     Ok(Plan {
         genre_fallback: None,
+        discogs_metadata: None,
         artist,
         album,
         country,
@@ -668,6 +660,7 @@ fn matching_release(source: &[Track], destination: &Path) -> Result<bool> {
         return Ok(false);
     }
     let mut used = HashSet::new();
+    let mut pairs = Vec::new();
     for track in source {
         let signature = (disc_number(track)?, track_number(track)?);
         let candidates: Vec<_> = found
@@ -684,11 +677,22 @@ fn matching_release(source: &[Track], destination: &Path) -> Result<bool> {
             return Ok(false);
         }
         let (index, other) = candidates[0];
-        if !used.insert(index) || pcm_hash(&track.path)? != pcm_hash(&other.path)? {
+        if !used.insert(index) {
             return Ok(false);
         }
+        pairs.push((&track.path, &other.path));
     }
-    Ok(true)
+    let matches = file_pool()?.install(|| {
+        pairs
+            .par_iter()
+            .map(|(source, destination)| {
+                let (source, destination) =
+                    rayon::join(|| pcm_hash(source), || pcm_hash(destination));
+                Ok(source? == destination?)
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    Ok(matches.into_iter().all(|equal| equal))
 }
 fn existing(server: &Path, plan: &Plan, source: &[Track]) -> Result<Option<PathBuf>> {
     let exact = server.join(&plan.directory);
@@ -927,6 +931,7 @@ fn process_one(
     server: &Path,
     template: &template::Template,
     library: Option<&genres::Library>,
+    lookup: Option<&discogs::Lookup>,
     timings: bool,
 ) -> Result<(PathBuf, Plan, bool)> {
     let mut timing = Timing::new(release, timings);
@@ -956,14 +961,68 @@ fn process_one(
     );
     timing.next("read_tags");
     let mut tracks = tracks(&paths)?;
+    timing.next("discogs_lookup");
+    let matched = if let Some(lookup) = lookup {
+        match lookup.find(release, &tracks) {
+            Ok(found) => found,
+            Err(error) if shutdown::requested() => return Err(error),
+            Err(error) => {
+                eprintln!("  Discogs lookup unavailable: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut enriched = release.clone();
+    if let Some(found) = &matched {
+        enriched = discogs::apply(release, &mut tracks, found);
+        eprintln!(
+            "  Discogs confirmed {} release matches; catalog {}",
+            found.ids.len(),
+            found.catalog.as_deref().unwrap_or("unresolved")
+        );
+    } else {
+        if lookup.is_some() {
+            eprintln!(
+                "  No confirmed Discogs artist/title/country match; keeping recognized source genres only"
+            );
+        }
+        // Unconfirmed freeform Bandcamp vocabulary must not pollute the library.
+        enriched.genre = enriched
+            .genre
+            .split(';')
+            .filter(|g| crate::genres::recognized(g))
+            .collect::<Vec<_>>()
+            .join(";");
+        for track in &mut tracks {
+            if let Some(genres) = track.tags.get_mut("GENRE") {
+                *genres = genres
+                    .iter()
+                    .flat_map(|g| g.split(';'))
+                    .filter(|g| crate::genres::recognized(g))
+                    .map(str::to_owned)
+                    .collect();
+            }
+        }
+    }
     timing.next("prepare_tags");
-    let mut plan = prepare_tags(release, &mut tracks, template)?;
+    let mut plan = prepare_tags(&enriched, &mut tracks, template)?;
+    plan.discogs_metadata = matched.as_ref().map(|found| found.evidence.clone());
     timing.next("verify_existing");
     if let Some(existing) = existing(server, &plan, &tracks)? {
+        if let Some(evidence) = plan.discogs_metadata.as_mut() {
+            evidence["applied"] = false.into();
+        }
         return Ok((existing, plan, true));
     }
+    if let Some(evidence) = plan.discogs_metadata.as_mut() {
+        evidence["applied"] = true.into();
+    }
     timing.next("genre_fallback");
-    if let Some(library) = library {
+    if matched.is_none()
+        && let Some(library) = library
+    {
         plan.genre_fallback = library.apply(&plan.artist, &mut tracks)?;
     }
     timing.next("copy_tag_verify");
@@ -971,31 +1030,54 @@ fn process_one(
     let staging = output_work.path().join("publish");
     fs::create_dir(&staging)?;
     let mut parts = [std::time::Duration::ZERO; 6];
-    let validation = (|| -> Result<()> {
-        for (track, relative) in tracks.iter().zip(&plan.files) {
-            shutdown::check()?;
-            let dest = staging.join(relative);
-            measured(&mut parts[0], || {
-                fs::create_dir_all(dest.parent().context("Track parent")?)?;
-                fs::copy(&track.path, &dest)?;
-                Ok(())
-            })?;
-            measured(&mut parts[1], || tagging::write(&dest, &track.tags))?;
-            let source_hash = measured(&mut parts[2], || pcm_hash(&track.path))?;
-            let destination_hash = measured(&mut parts[3], || pcm_hash(&dest))?;
-            ensure!(
-                source_hash == destination_hash,
-                "Decoded audio changed during tagging: {}",
-                dest.display()
-            );
-            measured(&mut parts[4], || verify_tags(&track.tags, &dest))?;
-            measured(&mut parts[5], || {
-                File::open(&dest)?.sync_all()?;
-                Ok(())
-            })?;
+    let results = file_pool()?.install(|| {
+        tracks
+            .par_iter()
+            .zip(&plan.files)
+            .map(|(track, relative)| {
+                let mut parts = [std::time::Duration::ZERO; 6];
+                let result = (|| -> Result<()> {
+                    shutdown::check()?;
+                    let dest = staging.join(relative);
+                    measured(&mut parts[0], || {
+                        fs::create_dir_all(dest.parent().context("Track parent")?)?;
+                        fs::copy(&track.path, &dest)?;
+                        Ok(())
+                    })?;
+                    measured(&mut parts[1], || tagging::write(&dest, &track.tags))?;
+                    let (source_time, destination_time) = parts[2..4].split_at_mut(1);
+                    let (source_hash, destination_hash) = rayon::join(
+                        || measured(&mut source_time[0], || pcm_hash(&track.path)),
+                        || measured(&mut destination_time[0], || pcm_hash(&dest)),
+                    );
+                    let source_hash = source_hash?;
+                    let destination_hash = destination_hash?;
+                    ensure!(
+                        source_hash == destination_hash,
+                        "Decoded audio changed during tagging: {}",
+                        dest.display()
+                    );
+                    measured(&mut parts[4], || verify_tags(&track.tags, &dest))?;
+                    measured(&mut parts[5], || {
+                        File::open(&dest)?.sync_all()?;
+                        Ok(())
+                    })?;
+                    Ok(())
+                })();
+                (parts, result)
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut validation = Ok(());
+    for (elapsed, result) in results {
+        for (total, elapsed) in parts.iter_mut().zip(elapsed) {
+            *total += elapsed;
         }
-        Ok(())
-    })();
+        if validation.is_ok() {
+            validation = result;
+        }
+    }
+
     if timings {
         for (name, elapsed) in [
             "copy",
@@ -1041,8 +1123,19 @@ fn process_one(
     if !staging.join("folder.jpg").exists() {
         for track in &tracks {
             if let Some(picture) = tagging::picture(&track.path)? {
-                fs::write(staging.join("folder.jpg"), picture)?;
-                File::open(staging.join("folder.jpg"))?.sync_all()?;
+                let name = if picture.starts_with(b"\x89PNG\r\n\x1a\n") {
+                    "folder.png"
+                } else if picture.starts_with(b"\xff\xd8") {
+                    "folder.jpg"
+                } else {
+                    continue;
+                };
+                ensure!(
+                    !plan.files.contains(&PathBuf::from(name)),
+                    "Artwork path collision"
+                );
+                fs::write(staging.join(name), picture)?;
+                File::open(staging.join(name))?.sync_all()?;
                 break;
             }
         }
@@ -1052,7 +1145,7 @@ fn process_one(
     fs::write(
         &manifest,
         serde_json::to_vec_pretty(
-            &json!({"item_key":release.key,"artist":plan.artist,"album":plan.album,"country_iso":plan.country,"files":plan.files,"version":env!("CARGO_PKG_VERSION"),"genre_fallback":plan.genre_fallback}),
+            &json!({"item_key":release.key,"artist":plan.artist,"album":plan.album,"country_iso":plan.country,"files":plan.files,"version":env!("CARGO_PKG_VERSION"),"genre_fallback":plan.genre_fallback,"discogs_metadata":plan.discogs_metadata}),
         )?,
     )?;
     File::open(manifest)?.sync_all()?;
@@ -1181,6 +1274,16 @@ pub fn run(args: &Args) -> Result<()> {
     } else {
         None
     };
+    let lookup = if args.offline {
+        None
+    } else {
+        discogs::Lookup::from_env(&input.join("resources/discogs-cache"))?
+    };
+    if !args.offline && lookup.is_none() {
+        eprintln!(
+            "Discogs lookup unavailable: set DISCOGS_TOKEN or VCW_DISCOGS_TOKEN; retaining only recognized genres"
+        );
+    }
     let rows = processing_rows(&db, args)?;
     if args.timings {
         eprintln!(
@@ -1205,7 +1308,7 @@ pub fn run(args: &Args) -> Result<()> {
          -> Result<()> {
             match result {
                 Ok((path, plan, exists)) => {
-                    db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback) WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
+                    db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback),discogs_metadata=NULLIF(?,'') WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&plan.discogs_metadata.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
                     if exists {
                         *skipped += 1;
                         eprintln!(
@@ -1237,6 +1340,7 @@ pub fn run(args: &Args) -> Result<()> {
         let server = &server;
         let template = &template;
         let library_path = &library_path;
+        let lookup = lookup.as_ref();
         for row in rows {
             if shutdown::requested() {
                 break;
@@ -1286,7 +1390,8 @@ pub fn run(args: &Args) -> Result<()> {
                         input,
                         server,
                         template,
-                        library.as_ref(),
+                        library.as_ref().filter(|_| args.offline),
+                        lookup,
                         args.timings,
                     )
                 }),

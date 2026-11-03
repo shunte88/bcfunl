@@ -10,7 +10,7 @@ existing music-library copies.
 
 Compose uses the prebuilt `ghcr.io/shunte88/bcfunl:latest` image. No local
 compilation, Rust installation, or sibling VCW checkout is required on the NAS.
-The final Linux image contains aria2c, 7z, ffmpeg, ffprobe, metaflac, gzip,
+The final Linux image contains aria2c, 7z, gzip,
 sha256sum, flock, SQLite and CA certificates. Cookies, music, staging history,
 and resource databases are not baked into the image.
 
@@ -174,3 +174,9 @@ separately; the Linux container includes them.
 
 Image execution needs a working Docker daemon and dataset access. A successful
 image pull does not by itself verify dataset permissions or processing.
+
+For optional release enrichment, put `DISCOGS_TOKEN` in the private stack `.env`
+and forward it through the service environment as in the supplied Compose file.
+Use `--process --offline` to disable network lookups. Recreate the one-shot job
+after changing its environment. Discogs matches must agree on artist/title/country;
+matching genres/styles replace Bandcamp genres rather than merging both.

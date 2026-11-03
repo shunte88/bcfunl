@@ -1,15 +1,16 @@
 //! Performer and remix credit handling adapted from mcfunl.
 use super::Tags;
 pub fn artist_names(value: &str) -> Vec<String> {
-    parsed_names(value, true)
+    parsed_names(value, true, true)
 }
-fn parsed_names(value: &str, expand: bool) -> Vec<String> {
+fn parsed_names(value: &str, expand: bool, commas: bool) -> Vec<String> {
     let mut pending = vec![value];
     let mut names: Vec<String> = Vec::new();
     while let Some(value) = pending.pop() {
         let value = value.trim();
-        if expand && let Some(mapped) = crate::sanitizing::mapped_artists(value) {
-            for name in mapped {
+        if let Some(mapped) = crate::sanitizing::mapped_artists(value) {
+            let original = vec![value.to_owned()];
+            for name in if expand { mapped } else { &original } {
                 if !names.iter().any(|old| old.eq_ignore_ascii_case(name)) {
                     names.push(name.clone());
                 }
@@ -18,6 +19,8 @@ fn parsed_names(value: &str, expand: bool) -> Vec<String> {
         }
         let lower = value.to_ascii_lowercase();
         let split = [
+            ";",
+            ", ",
             "|",
             " / ",
             " (feat.",
@@ -35,6 +38,9 @@ fn parsed_names(value: &str, expand: bool) -> Vec<String> {
         ]
         .into_iter()
         .filter_map(|marker| {
+            if marker == ", " && !commas {
+                return None;
+            }
             // Lowercase 'with' is a credit marker; preserve proper names such as Man With No Name.
             let text = if marker.contains("with") {
                 value
@@ -153,6 +159,17 @@ pub fn normalize_artists(tags: &mut Tags) {
         "ALBUM_ARTIST",
         "ALBUMARTISTSORT",
         "REMIXER",
+        "COMPOSER",
+        "CONDUCTOR",
+        "LYRICIST",
+        "WRITER",
+        "PRODUCER",
+        "ENGINEER",
+        "ARRANGER",
+        "MIXER",
+        "DJMIXER",
+        "ORCHESTRA",
+        "ENSEMBLE",
     ] {
         if let Some(values) = tags.get_mut(key) {
             let mut names = Vec::new();
@@ -173,7 +190,7 @@ pub fn normalize_artists(tags: &mut Tags) {
                         value = &value[prefix.len()..];
                     }
                 }
-                for name in artist_names(value) {
+                for name in parsed_names(value, true, !key.ends_with("SORT")) {
                     if !names
                         .iter()
                         .any(|old: &String| old.eq_ignore_ascii_case(&name))
@@ -215,11 +232,22 @@ pub fn split_fields(tags: &mut Tags) {
         "ALBUM_ARTIST",
         "ALBUMARTISTSORT",
         "REMIXER",
+        "COMPOSER",
+        "CONDUCTOR",
+        "LYRICIST",
+        "WRITER",
+        "PRODUCER",
+        "ENGINEER",
+        "ARRANGER",
+        "MIXER",
+        "DJMIXER",
+        "ORCHESTRA",
+        "ENSEMBLE",
     ] {
         if let Some(values) = tags.get_mut(key) {
             let mut names = Vec::new();
             for value in values.iter() {
-                for name in parsed_names(value, false) {
+                for name in parsed_names(value, false, !key.ends_with("SORT")) {
                     if !names
                         .iter()
                         .any(|old: &String| old.eq_ignore_ascii_case(&name))

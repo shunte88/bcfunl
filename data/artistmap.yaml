@@ -141,3 +141,7 @@ Romy & Peaches:
 Noisia & Two Fingers:
   - Noisia
   - Two Fingers
+
+# A comma within this band name is literal, not a performer-list separator.
+Earth, Wind & Fire:
+  - Earth, Wind & Fire

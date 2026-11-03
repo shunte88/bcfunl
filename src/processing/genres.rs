@@ -131,7 +131,7 @@ pub(super) mod tests {
         assert!(!tracks[0].tags.contains_key("BCFUNL_GENRE_SOURCE"));
         assert_eq!(
             tracks[1].tags["GENRE"],
-            ["Electronic", "Ambient", "Techno", "Idm", "Drone"]
+            ["Electronic", "Ambient", "Techno", "IDM", "Drone"]
         );
         assert_eq!(audit["tracks"].as_array().unwrap().len(), 1);
         assert_eq!(audit["artist_id"], "1");

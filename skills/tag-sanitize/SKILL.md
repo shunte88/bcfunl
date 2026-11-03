@@ -14,7 +14,9 @@ applying patches. It contains credit separation, field aliases, genre processing
 container-specific writes, the JSON handoff, and audio-preserving replacement.
 Source paths in that reference are relative to the caller repository.
 
-Use the caller's existing sanitizer and native writers in bcfunl/mcfunl. For
+Use the caller's existing sanitizer and native writers in bcfunl/mcfunl. Bcfunl
+uses Lofty for tags/artwork and Symphonia for strict decoded-audio verification;
+it needs no external audio tools at runtime. For
 standalone edits use typed Mutagen APIs, ffprobe for inspection, and ffmpeg for
 audio verification. Preserve real multi-values, artwork and unrelated tags.
 

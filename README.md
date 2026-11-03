@@ -12,7 +12,7 @@ of what is complete.
 - **Repeatable collection downloads.** SQLite history tracks successes and failures so later runs can focus on unfinished purchases.
 - **A verified music library.** Clean up tags and filenames, preserve artwork, and verify decoded audio before publishing releases.
 - **Parallel downloads and processing.** Run 2–8 releases at a time.
-- **Better metadata.** Apply artist mappings, extract catalog numbers, filter invalid genre tags, and fill missing genres from a local Discogs research library.
+- **Better metadata.** Apply artist mappings, extract catalog numbers, filter invalid genre tags, and prefer confirmed Discogs release genres/styles.
 - **Scheduled maintenance.** Acquire, process, and clean successful downloads in one serialized workflow.
 
 ## Overview
@@ -24,8 +24,9 @@ Download and processing history are tracked separately, making retries and regul
 maintenance practical.
 
 Use it interactively for a few releases or schedule it after the initial
-collection has been downloaded. Processing is offline; monthly Discogs artist
-and master extracts provide optional genre fallback without live provider lookups.
+collection has been downloaded. Processing uses Discogs release metadata when a token is configured, requiring
+matching artist, title, and country (Discogs Worldwide matches any country). Use `--offline` to avoid network lookups;
+monthly artist/master extracts remain an optional offline genre fallback.
 
 ## Quick start
 
@@ -129,8 +130,6 @@ the sibling VCW source checkout at runtime.
 | --- | --- |
 | `aria2c` | Parallel downloads |
 | `7z` | Processing ZIP archives |
-| `ffprobe`, `ffmpeg` | Inspecting media, verifying audio, and updating supported containers |
-| `metaflac` | FLAC tags and artwork |
 | `gzip`, `sha256sum` | Discogs resource imports and checksum verification |
 | `flock` | Scheduled maintenance wrapper |
 
@@ -138,11 +137,11 @@ On Ubuntu/Debian, install the complete runtime set:
 
 ```sh
 sudo apt update
-sudo apt install aria2 7zip ffmpeg flac gzip coreutils util-linux libsqlite3-0
+sudo apt install aria2 7zip gzip coreutils util-linux libsqlite3-0
 ```
 
-`flac` provides `metaflac`; `ffmpeg` provides `ffprobe`. Older distributions may
-provide `7z` through `p7zip-full`. The `sqlite3` command is optional for manual
+Audio inspection, tagging, artwork reads, and PCM verification run in Rust using
+Lofty and Symphonia. Older distributions may provide `7z` through `p7zip-full`. The `sqlite3` command is optional for manual
 queries; bcfunl links the SQLite library directly.
 
 For TrueNAS, use the [deployment guide](docs/TRUENAS.md). If the appliance lacks
@@ -182,3 +181,20 @@ Remove cookies, signed URLs, and private data.
 ## License
 
 See [LICENSE](LICENSE) for the GNU General Public License, version 3.
+
+Processing reads and writes metadata with Lofty and validates decoded audio with
+Symphonia, following VCW's native container handling. FFmpeg, ffprobe, metaflac,
+and Python/Mutagen are not runtime requirements.
+
+`--parallel` controls concurrent releases. Track reads and copy/tag/verification
+jobs share one process-wide pool capped at eight workers and available CPU
+parallelism. Multiple releases share this pool rather than each creating a new
+track pool. Omitting `--parallel` processes one release at a time while its tracks
+can still run concurrently. Timing components sum track work and may exceed wall
+time. Publication waits for every track worker and all verification checks.
+
+For Discogs enrichment, set `DISCOGS_TOKEN` in the environment (or the private
+Compose `.env`). Matching genres/styles replace the Bandcamp genre collection.
+Missing catalog numbers come from the first eligible Discogs release. Unknown
+Bandcamp genre phrases are excluded; descriptive EBM aliases expand to separate
+`EBM` and `Electronic` values. Short canonical acronyms retain uppercase spelling.

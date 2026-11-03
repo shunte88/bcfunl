@@ -2,6 +2,11 @@
 
 Sanitize music tags into per-file collections for a caller, or apply requested cleanup at the same pathname through a verified temporary copy. Updating this skill does not process any music.
 
+In bcfunl, use its native Lofty tag/artwork routines and Symphonia decoded PCM
+verification, preserving bounded retries and the shared file worker pool. Do not
+add subprocess audio tools to that runtime. The standalone guidance below applies
+to callers without these native routines.
+
 Use **Mutagen for tags**, **ffprobe for stream inspection**, and **ffmpeg for audio verification**. Inside mcfunl, reuse its existing sanitizer/writers rather than adding a parallel implementation.
 
 ## Scope and formats
@@ -35,8 +40,8 @@ Resolve source paths against the caller repository, not the installed skill dire
 
 ### Artist and track credits
 
-1. Trim/deduplicate individual credits case insensitively; preserve order, spelling, source multi-values and provider sort names.
-2. Split explicit pipes, spaced ` / ` collaborations, `feat.`/`ft.`/`featuring`, parenthesized variants and lowercase `with`. Preserve `Man With No Name`. Never split commas, bare slashes, arbitrary hyphens or ampersands; an independently known remixer may disambiguate an ampersand.
+1. In bcfunl, expand semicolon-delimited artist/performer/sort and related credit fields into native multi-values, as well as genre fields. Preserve semicolons and line breaks in free text such as titles, lyrics and comments. Trim/deduplicate individual credits case insensitively; preserve order, spelling, source multi-values and provider sort names.
+2. Split explicit pipes, spaced ` / ` collaborations, `feat.`/`ft.`/`featuring`, parenthesized variants and lowercase `with`. Preserve `Man With No Name`. In bcfunl, comma-space also separates credit names, with explicit artist-map exceptions taking precedence; preserve commas inside sort fields and free text. Other callers must not split arbitrary commas. Never split bare slashes, arbitrary hyphens or ampersands; an independently known remixer may disambiguate an ampersand.
 3. Keep separate `ARTIST`/`TRACKARTIST`/`ARTISTSORT` values, preserving commas inside names. Use the known primary album performer and synchronize existing `ALBUM_ARTIST`. Never guess sort-name inversions.
 4. Parse explicit `remixed by`/`remix by` and named bracketed/trailing remix credits into `REMIXER` and track artists, retaining TITLE version text. Original/extended/club/radio/dub/vocal/instrumental/VIP alone are descriptors. Never invent spelling aliases.
 5. Strip an exact structured-artist title prefix, using release artist only when no track artist exists. Strip ` - Known Performer [ft. Guest]` only without bracketed/mix qualifiers; preserve that verified provider credit on the track unless structured credits conflict. Never split every title hyphen.
@@ -172,16 +177,15 @@ in BCFUNL_GENRE_SOURCE, release manifests and releases.genre_fallback rather
 than promoting the fallback into confirmed releases.genre. Do not borrow any
 other release fields. Preserve normal audio/tag verification and server skips.
 
-### Stale single-track prerelease markers
+### Stale prerelease markers
 
-For a release with exactly one staged audio file and a known publication date
-strictly before today (UTC), remove explicit bracketed `pre-release`, `prerelease`
-or `pre release` markers from derived ALBUM/TITLE values. Preserve ordinary title
-wording such as `Pre-Release Versions`. Do not remove markers for same-day,
-future, missing-date or multi-file releases. Preserve captured source evidence.
-Downloader eligibility additionally requires single-track metadata and no
-conflicting same-day/future date evidence before ignoring a preorder flag;
-one downloadable item alone does not prove single-track cardinality.
+Remove explicit bracketed prerelease markers from derived ALBUM/TITLE values for
+releases dated more than 30 UTC calendar days before today, regardless of track
+count. Preserve the existing exception for a single audio file dated before today.
+Keep ordinary title wording such as `Pre-Release Versions` and captured source
+metadata. Download eligibility applies the same rule to all available release
+date evidence, including refreshed links; missing or conflicting recent/future
+dates do not qualify. Exactly 30 days is insufficient for multi-track releases.
 
 ### Ombra International catalog titles
 
@@ -219,3 +223,36 @@ not present in known credits/the artist map can remain. Existing published
 library files are not rewritten automatically; use a fresh destination when
 validating new tagging behavior. Raw Discogs research imports remain evidence;
 fallback values are filtered when applied to tracks.
+
+### Confirmed Discogs release genres in bcfunl
+
+Require artist/title/country agreement before applying release metadata. Discogs Worldwide matches any source country without changing that source country. Use confirmed reciprocal artist-map aliases for identity, preserving Bandcamp primary naming. Replace
+Bandcamp genres with confirmed Discogs genres plus styles, through the shared
+map, local EBM overrides and hygiene. Without a confirmed match, retain only
+map-recognized source genres. Do not merge unrecognized Bandcamp vocabulary into
+a confirmed collection. Preserve canonical uppercase acronyms such as EBM/IDM.
+Artist-default estimates are available only during explicit offline processing
+and retain their distinct provenance. No existing server scrub is authorized by
+this enrichment step.
+
+Discogs selection in bcfunl is first eligible record in provider order. Use that
+record's catalog and full normalized genre/style collection, with one Discogs ID;
+do not pool IDs or require agreement across editions. Composite provider country
+lists match any listed normalized ISO country, and Worldwide is a wildcard.
+Preserve catalog spelling including internal spaces. If no record qualifies,
+leave lookup unresolved and move on rather than inventing metadata.
+
+For bcfunl track titles, use the generic album/catalog-decoration extractor in
+`src/sanitizing.rs`: a trailing bracket/parenthesis group must repeat the cleaned
+album title before a separator and valid mixed letter/number catalog. Extract
+the source code, remove the metadata decoration from TITLE, and use the catalog
+in tags/templates only if no established catalog exists. Do not add per-label
+extractors or invent expanded label names from compact catalog prefixes.
+
+Discogs lookup removes trailing year-qualified remaster/reissue notes from
+search and title comparison only. Supported forms include `(2026 Remaster)`,
+`[Remastered 2026]`, `- 2026 Reissue`, and `2026 RM/RE`, including reversed
+year order and re-issued/re-mastered spellings. Album tags and folder names
+retain the edition note. Remix, live, bonus-track, and unqualified year text
+remain significant. This matches a base title, not a specific pressing; the
+existing first eligible artist/title/country selection still applies.

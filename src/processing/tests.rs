@@ -188,6 +188,7 @@ fn processing_zip_records_completion_and_skips_verified_server_audio() {
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--user",
         "fixture",
         "--output",
@@ -313,6 +314,7 @@ fn missing_metadata_does_not_mark_processing_complete_or_change_downloads() {
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--user",
         "fixture",
         "--output",
@@ -408,6 +410,7 @@ fn matching_names_with_different_audio_are_not_skipped_or_overwritten() {
         server.path(),
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
+        None,
         false,
     );
     assert!(result.is_err());
@@ -448,6 +451,7 @@ fn embedded_artwork_survives_tagging_and_supplies_folder_image() {
         input.path(),
         server.path(),
         &template::Template::new(template::DEFAULT).unwrap(),
+        None,
         None,
         false,
     )
@@ -701,6 +705,7 @@ fn offline_artist_filter_leaves_other_releases_unattempted() {
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--user",
         "fixture",
         "--artist",
@@ -776,6 +781,7 @@ fn processing_dates_and_count_limit_attempts_after_sql_artist_selection() {
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--user",
         "fixture",
         "--artist",
@@ -1082,6 +1088,7 @@ fn processing_missing_genres_publishes_verified_fallback_and_audit_without_promo
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--parallel",
         "2",
         "--user",
@@ -1107,7 +1114,7 @@ fn processing_missing_genres_publishes_verified_fallback_and_audit_without_promo
     let published = tracks(&paths).unwrap();
     assert_eq!(
         published[0].tags["GENRE"],
-        ["Electronic", "Ambient", "Techno", "Idm", "Drone"]
+        ["Electronic", "Ambient", "Techno", "IDM", "Drone"]
     );
     assert!(published[0].tags.contains_key("BCFUNL_GENRE_SOURCE"));
     assert_eq!(
@@ -1143,6 +1150,7 @@ fn parallel_processing_preserves_count_history_skips_and_failure_isolation() {
     let mut args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--parallel",
         "2",
         "--user",
@@ -1235,6 +1243,7 @@ fn process_and_clean_removes_only_successful_payload_and_keeps_history() {
     let mut args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--clean",
         "--parallel",
         "2",
@@ -1308,12 +1317,22 @@ fn processing_leading_catalogs_preserve_album_subtitles_and_existing_catalogs() 
 }
 
 #[test]
-fn only_past_single_file_releases_lose_explicit_prerelease_markers() {
+fn stale_releases_lose_explicit_prerelease_markers() {
     for (count, date, strip) in [
         (1, "2023-01-01".to_owned(), true),
         (1, chrono::Utc::now().date_naive().to_string(), false),
         (1, String::new(), false),
-        (2, "2023-01-01".to_owned(), false),
+        (2, "2023-01-01".to_owned(), true),
+        (
+            2,
+            (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).to_string(),
+            false,
+        ),
+        (
+            2,
+            (chrono::Utc::now().date_naive() - chrono::Duration::days(31)).to_string(),
+            true,
+        ),
     ] {
         let mut r = release(PathBuf::from("unused.flac"));
         r.publish = date;
@@ -1499,6 +1518,7 @@ fn limited_process_cleanup_does_not_walk_or_clean_unrelated_history() {
     let args = Args::try_parse_from([
         "bcfunl",
         "--process",
+        "--offline",
         "--clean",
         "--count",
         "1",
@@ -1566,4 +1586,616 @@ fn fast_flac_tag_readback_matches_full_reader() {
         tagging::read_tags(&path).unwrap(),
         tagging::read(&path).unwrap().0
     );
+}
+
+#[test]
+fn native_decoding_matches_independent_lossless_pcm_and_rejects_truncation() {
+    for ext in ["flac", "wav", "aiff", "m4a"] {
+        let (_dir, path) = fixture(ext);
+        let reference = command(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-xerror", "-nostdin", "-i"])
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-c:a",
+                    "pcm_f64le",
+                    "-f",
+                    "hash",
+                    "-hash",
+                    "sha256",
+                    "-",
+                ]),
+        )
+        .unwrap();
+        assert!(
+            pcm_hash(&path).unwrap().ends_with(reference.trim()),
+            "{ext}"
+        );
+        if ext == "flac" {
+            let len = fs::metadata(&path).unwrap().len();
+            OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_len(len - 100)
+                .unwrap();
+            assert!(pcm_hash(&path).is_err());
+        }
+    }
+}
+
+#[test]
+fn native_tags_preserve_unknown_fields_artwork_and_remove_discarded_genres() {
+    for ext in ["flac", "wav", "mp3", "aiff", "m4a", "aac-hi", "ogg"] {
+        let (_dir, path) = fixture(ext);
+        let mut tags = sample();
+        tags.insert(
+            "BCFUNL_TEST_UNKNOWN".into(),
+            vec!["Keep me".into(), "Keep me too".into()],
+        );
+        tags.insert("GENRE".into(), vec!["123".into()]);
+        tagging::write(&path, &tags).unwrap();
+        let mut replacement = sample();
+        replacement.insert("ARTIST".into(), vec!["First".into(), "Second".into()]);
+        tagging::write(&path, &replacement).unwrap();
+        let read = tagging::read_tags(&path).unwrap();
+        assert!(!read.contains_key("GENRE"), "{ext}: {read:?}");
+        assert_eq!(
+            read["BCFUNL_TEST_UNKNOWN"],
+            ["Keep me", "Keep me too"],
+            "{ext}"
+        );
+        assert_eq!(read["ARTIST"], ["First", "Second"], "{ext}");
+    }
+}
+
+#[test]
+fn multiple_tracks_and_releases_share_bounded_native_workers() {
+    let (input, path) = fixture("flac");
+    let mut paths = Vec::new();
+    for n in 1..=8 {
+        let track = input.path().join(format!("track{n}.flac"));
+        fs::copy(&path, &track).unwrap();
+        let mut tags = sample();
+        put(&mut tags, "TRACKNUMBER", n.to_string());
+        put(&mut tags, "TITLE", format!("Track {n}"));
+        tagging::write(&track, &tags).unwrap();
+        paths.push(track);
+    }
+    assert!(file_pool().unwrap().current_num_threads() <= 8);
+    thread::scope(|scope| {
+        let jobs: Vec<_> = (0..2)
+            .map(|_| {
+                let paths = &paths;
+                let path = &path;
+                scope.spawn(move || {
+                    let server = tempfile::tempdir().unwrap();
+                    let mut tracks = tracks(paths).unwrap();
+                    let plan = prepare_tags(
+                        &release(path.clone()),
+                        &mut tracks,
+                        &template::Template::new(template::DEFAULT).unwrap(),
+                    )
+                    .unwrap();
+                    file_pool().unwrap().install(|| {
+                        tracks
+                            .par_iter()
+                            .zip(&plan.files)
+                            .for_each(|(track, relative)| {
+                                let dest = server.path().join(relative);
+                                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                                fs::copy(&track.path, &dest).unwrap();
+                                tagging::write(&dest, &track.tags).unwrap();
+                                verify_tags(&track.tags, &dest).unwrap();
+                                assert_eq!(
+                                    pcm_hash(&track.path).unwrap(),
+                                    pcm_hash(&dest).unwrap()
+                                );
+                            })
+                    });
+                })
+            })
+            .collect();
+        for job in jobs {
+            job.join().unwrap();
+        }
+    });
+}
+
+#[test]
+#[ignore = "manual optimized comparison; requires FFmpeg to generate reference audio"]
+fn benchmark_native_decoding_against_subprocess_reference() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("minute.flac");
+    command(
+        Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=60",
+                "-ar",
+                "96000",
+                "-ac",
+                "2",
+                "-sample_fmt",
+                "s32",
+            ])
+            .arg(&path),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let native = pcm_hash(&path).unwrap();
+    let native_time = start.elapsed();
+    let start = std::time::Instant::now();
+    command(
+        Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=sample_rate,channels",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&path),
+    )
+    .unwrap();
+    let reference = command(
+        Command::new("ffmpeg")
+            .args(["-v", "error", "-xerror", "-nostdin", "-i"])
+            .arg(&path)
+            .args([
+                "-map",
+                "0:a:0",
+                "-c:a",
+                "pcm_f64le",
+                "-f",
+                "hash",
+                "-hash",
+                "sha256",
+                "-",
+            ]),
+    )
+    .unwrap();
+    let reference_time = start.elapsed();
+    assert!(native.ends_with(reference.trim()));
+    eprintln!(
+        "60s stereo 96kHz FLAC: native={:.3}s, previous subprocess path={:.3}s",
+        native_time.as_secs_f64(),
+        reference_time.as_secs_f64()
+    );
+}
+
+#[test]
+fn legacy_riff_and_aiff_text_tags_are_read_and_reconciled() {
+    for ext in ["wav", "aiff"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("legacy.{ext}"));
+        command(
+            Command::new("ffmpeg")
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=duration=0.1",
+                    "-metadata",
+                    "title=Old Title",
+                    "-metadata",
+                    "artist=Old Artist",
+                ])
+                .arg(&path),
+        )
+        .unwrap();
+        let (mut tags, _) = tagging::read(&path).unwrap();
+        assert_eq!(tags["TITLE"], ["Old Title"], "{ext}");
+        put(&mut tags, "TITLE", "New Title");
+        tagging::write(&path, &tags).unwrap();
+        assert_eq!(tagging::read(&path).unwrap().0["TITLE"], ["New Title"]);
+        use lofty::file::TaggedFileExt;
+        for tag in lofty::read_from_path(&path).unwrap().tags() {
+            use lofty::prelude::{Accessor, ItemKey};
+            if let Some(title) = tag.title() {
+                assert_eq!(title, "New Title", "{ext}");
+            }
+            assert!(
+                tag.get_strings(ItemKey::TrackTitle)
+                    .all(|title| title == "New Title")
+            );
+        }
+    }
+}
+
+#[test]
+fn native_high_resolution_pcm_matches_independent_decoder() {
+    for (ext, codec) in [
+        ("flac", "flac"),
+        ("wav", "pcm_s24le"),
+        ("wav", "pcm_f64le"),
+        ("aiff", "pcm_s24be"),
+        ("aiff", "pcm_f32be"),
+        ("m4a", "alac"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(format!("audio.{ext}"));
+        command(
+            Command::new("ffmpeg")
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=duration=0.1",
+                    "-ar",
+                    "96000",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    codec,
+                ])
+                .arg(&path),
+        )
+        .unwrap();
+        let reference = command(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-xerror", "-nostdin", "-i"])
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-c:a",
+                    "pcm_f64le",
+                    "-f",
+                    "hash",
+                    "-hash",
+                    "sha256",
+                    "-",
+                ]),
+        )
+        .unwrap();
+        assert!(
+            pcm_hash(&path).unwrap().ends_with(reference.trim()),
+            "{ext}: {codec}"
+        );
+    }
+}
+
+#[test]
+fn native_multivalues_expand_semicolons_and_preserve_multiline_lyrics() {
+    for ext in ["flac", "wav", "mp3", "aiff", "m4a", "aac-hi", "ogg"] {
+        let (_dir, path) = fixture(ext);
+        let mut tags = sample();
+        for key in [
+            "ARTIST",
+            "TRACKARTIST",
+            "ALBUMARTIST",
+            "ARTISTSORT",
+            "ALBUMARTISTSORT",
+            "PERFORMER",
+            "COMPOSER",
+            "CONDUCTOR",
+            "REMIXER",
+            "PRODUCER",
+        ] {
+            tags.insert(key.into(), vec![" First ; Second; ;First ".into()]);
+        }
+        tags.insert("GENRE".into(), vec!["Ambient; Electronic; ".into()]);
+        tags.insert("TITLE".into(), vec!["One; Complete Title".into()]);
+        tags.insert(
+            "UNSYNCEDLYRICS".into(),
+            vec!["First line\r\nSecond line; lyric text\r\n".into()],
+        );
+        let before = pcm_hash(&path).unwrap();
+        tagging::write(&path, &tags).unwrap();
+        let read = tagging::read_tags(&path).unwrap();
+        for key in [
+            "ARTIST",
+            "TRACKARTIST",
+            "ALBUMARTIST",
+            "ARTISTSORT",
+            "ALBUMARTISTSORT",
+            "PERFORMER",
+            "COMPOSER",
+            "CONDUCTOR",
+            "REMIXER",
+            "PRODUCER",
+        ] {
+            assert_eq!(read[key], ["First", "Second"], "{ext}: {key}");
+        }
+        assert_eq!(read["GENRE"], ["Ambient", "Electronic"], "{ext}");
+        assert_eq!(read["TITLE"], tags["TITLE"], "{ext}");
+        assert_eq!(read["UNSYNCEDLYRICS"], tags["UNSYNCEDLYRICS"], "{ext}");
+        assert_eq!(pcm_hash(&path).unwrap(), before, "{ext}");
+    }
+    assert_eq!(credits::artist_names("First; Second;"), ["First", "Second"]);
+}
+
+#[test]
+fn comma_performer_lists_expand_without_splitting_sort_names_or_mapped_bands() {
+    let artists = "Amevicious, Phred Noir, Bardamu, Nici Palm, Rødel, Akrav";
+    let expected = [
+        "Amevicious",
+        "Phred Noir",
+        "Bardamu",
+        "Nici Palm",
+        "Rødel",
+        "Akrav",
+    ];
+    assert_eq!(credits::artist_names(artists), expected);
+    for ext in ["flac", "wav", "mp3", "aiff", "m4a", "ogg"] {
+        let (_dir, path) = fixture(ext);
+        let mut tags = sample();
+        for key in ["ARTIST", "TRACKARTIST", "PERFORMER", "ALBUMARTIST"] {
+            put(&mut tags, key, artists);
+        }
+        put(&mut tags, "ARTISTSORT", "Madley Croft, Romy; Phred Noir");
+        put(&mut tags, "ALBUMARTISTSORT", "Madley Croft, Romy");
+        put(&mut tags, "TITLE", "One, Complete Title");
+        tagging::write(&path, &tags).unwrap();
+        let read = tagging::read_tags(&path).unwrap();
+        for key in ["ARTIST", "TRACKARTIST", "PERFORMER", "ALBUMARTIST"] {
+            assert_eq!(read[key], expected, "{ext}: {key}");
+        }
+        assert_eq!(read["ARTISTSORT"], ["Madley Croft, Romy", "Phred Noir"]);
+        assert_eq!(read["ALBUMARTISTSORT"], ["Madley Croft, Romy"]);
+        assert_eq!(read["TITLE"], ["One, Complete Title"]);
+        let mut tracks = tracks(std::slice::from_ref(&path)).unwrap();
+        let plan = prepare_tags(
+            &release(path),
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plan.artist, "Amevicious");
+        assert_eq!(tracks[0].tags["TRACKARTIST"], expected);
+        assert_eq!(tracks[0].tags["PERFORMER"], expected);
+    }
+    assert_eq!(
+        credits::artist_names("Earth, Wind & Fire"),
+        ["Earth, Wind & Fire"]
+    );
+}
+
+#[test]
+fn six_strings_track_credits_do_not_inherit_other_album_performers() {
+    let (_dir, path) = fixture("flac");
+    let mut release = release(path.clone());
+    release.artist = "Amevicious, Phred Noir, Bardamu, Nici Palm, Rødel, Akrav".into();
+    release.album = "Six Strings In The Devil's Sorrow".into();
+    let expected = [
+        ("The Atonement", vec!["Amevicious", "Phred Noir"]),
+        ("Strange People", vec!["Bardamu"]),
+        ("Functional Freeze", vec!["Nici Palm", "Rødel"]),
+        ("Satanisch", vec!["Akrav", "Solas"]),
+    ];
+    let mut tracks: Vec<_> = expected
+        .iter()
+        .enumerate()
+        .map(|(n, (title, names))| {
+            let mut tags = Tags::new();
+            put(&mut tags, "ARTIST", names.join(", "));
+            put(&mut tags, "ALBUMARTIST", &release.artist);
+            put(&mut tags, "ALBUM", &release.album);
+            put(&mut tags, "TITLE", title);
+            put(&mut tags, "TRACKNUMBER", n + 1);
+            Track {
+                path: path.clone(),
+                tags,
+                duration: 0.15,
+            }
+        })
+        .collect();
+    prepare_tags(
+        &release,
+        &mut tracks,
+        &template::Template::new(template::DEFAULT).unwrap(),
+    )
+    .unwrap();
+    for (track, (title, names)) in tracks.iter().zip(expected) {
+        assert_eq!(track.tags["TRACKARTIST"], names, "{title}");
+        assert_eq!(track.tags["PERFORMER"], names, "{title}");
+        tagging::write(&path, &track.tags).unwrap();
+        verify_tags(&track.tags, &path).unwrap();
+    }
+}
+
+#[test]
+fn discogs_enrichment_precedes_template_and_publishes_authoritative_genres() {
+    let (input, path) = fixture("flac");
+    let mut tags = sample();
+    tags.remove("CATALOGNUMBER");
+    put(&mut tags, "GENRE", "Bandcamp Junk");
+    tagging::write(&path, &tags).unwrap();
+    let server = tempfile::tempdir().unwrap();
+    let lookup = discogs::fixture();
+    let (destination, plan, skipped) = process_one(
+        &release(path),
+        input.path(),
+        server.path(),
+        &template::Template::new(template::DEFAULT).unwrap(),
+        None,
+        Some(&lookup),
+        false,
+    )
+    .unwrap();
+    assert!(!skipped);
+    assert_eq!(plan.catalog, "DG001");
+    assert!(destination.to_string_lossy().contains("[DG001]"));
+    let published = tracks(&collect(&destination).unwrap()).unwrap();
+    assert_eq!(published[0].tags["GENRE"], ["Electronic", "EBM"]);
+    assert_eq!(published[0].tags["DISCOGSID"], ["1"]);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(destination.join(".bcfunl-release.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["discogs_metadata"]["country_iso"], "GB");
+}
+
+#[test]
+#[ignore = "manual live Discogs API check; requires credentials and network"]
+fn live_discogs_metadata_smoke() {
+    let root = tempfile::tempdir().unwrap();
+    let lookup = discogs::Lookup::from_env(root.path())
+        .unwrap()
+        .expect("Discogs token required");
+    let mut release = release("unused.flac".into());
+    release.artist = "David Holmes".into();
+    release.album = "Blind On A Galloping Horse (Remixes Vol. 2)".into();
+    release.country = "GB".into();
+    let result = lookup
+        .find(&release, &[])
+        .expect("Live Discogs request failed");
+    eprintln!(
+        "Live Discogs artist/title/country match: {}",
+        result
+            .as_ref()
+            .map(|m| m.evidence.to_string())
+            .unwrap_or_else(|| "unresolved".into())
+    );
+}
+
+#[test]
+fn unmatched_processing_keeps_only_recognized_source_genres() {
+    let (input, path) = fixture("flac");
+    let mut tags = sample();
+    put(
+        &mut tags,
+        "GENRE",
+        "Some Made Up Genre Phrase;EBM - electronic body music",
+    );
+    tagging::write(&path, &tags).unwrap();
+    let mut release = release(path);
+    release.genre = "Another Unrecognized Phrase".into();
+    let server = tempfile::tempdir().unwrap();
+    let (destination, _, _) = process_one(
+        &release,
+        input.path(),
+        server.path(),
+        &template::Template::new(template::DEFAULT).unwrap(),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+    let files = tracks(&collect(&destination).unwrap()).unwrap();
+    assert_eq!(files[0].tags["GENRE"], ["EBM", "Electronic"]);
+}
+
+#[test]
+fn album_catalog_track_decorations_work_across_labels_and_preserve_known_catalogs() {
+    for code in [
+        "Ombrantl033",
+        "ABC033",
+        "ABC 033",
+        "ABC-033",
+        "ABC - 033",
+        "XYZ009",
+    ] {
+        for existing in [None, Some("CONFIRMED001")] {
+            let mut release = release("unused.flac".into());
+            release.artist = "SLF IMG".into();
+            release.album = "Chiodi EP".into();
+            release.genre.clear();
+            release.country = "DE".into();
+            let mut tags = sample();
+            put(&mut tags, "ALBUMARTIST", "SLF IMG");
+            put(&mut tags, "ARTIST", "SLF IMG");
+            put(&mut tags, "ALBUM", "Chiodi EP");
+            put(&mut tags, "TITLE", format!("Sex [Chiodi EP-{code}]"));
+            tags.remove("CATALOGNUMBER");
+            if let Some(existing) = existing {
+                put(&mut tags, "CATALOGNUMBER", existing);
+            }
+            let mut tracks = vec![Track {
+                path: release.source.clone(),
+                tags,
+                duration: 0.15,
+            }];
+            let plan = prepare_tags(
+                &release,
+                &mut tracks,
+                &template::Template::new(template::DEFAULT).unwrap(),
+            )
+            .unwrap();
+            let expected = existing
+                .map(str::to_owned)
+                .unwrap_or_else(|| code.to_uppercase());
+            assert_eq!(plan.catalog, expected);
+            assert_eq!(tracks[0].tags["TITLE"], ["Sex"]);
+            assert_eq!(tracks[0].tags["CATALOGNUMBER"], [expected.as_str()]);
+            assert_eq!(
+                plan.directory,
+                PathBuf::from(format!("SLF IMG/Chiodi EP [DE] [{expected}]"))
+            );
+            assert_eq!(plan.files, [PathBuf::from("01-01 - Sex.flac")]);
+        }
+    }
+    for raw in [
+        "Sex (2026 Remaster)",
+        "Sex [Chiodi EP - Extended Mix]",
+        "Sex [Other Album-ABC033]",
+        "Sex [Chiodi EP-2026]",
+        "Sex [Chiodi EP-ABC033 Remix]",
+    ] {
+        assert_eq!(
+            crate::sanitizing::track_title(raw, "Chiodi EP").1,
+            None,
+            "{raw}"
+        );
+    }
+    assert_eq!(
+        crate::sanitizing::track_title("Sex (chiodi ep : ABC-033)", "Chiodi EP"),
+        ("Sex".into(), Some("ABC-033".into()))
+    );
+}
+
+#[test]
+fn track_catalog_inference_accepts_spacing_variants_but_rejects_conflicting_codes() {
+    for (codes, valid) in [
+        (vec!["ABC033", "ABC 033", "ABC-033", "ABC - 033"], true),
+        (vec!["ABC033", "ABC034"], false),
+    ] {
+        let mut release = release("unused.flac".into());
+        release.album = "Generic EP".into();
+        let mut tracks: Vec<_> = codes
+            .iter()
+            .enumerate()
+            .map(|(i, code)| {
+                let mut tags = sample();
+                tags.remove("CATALOGNUMBER");
+                put(&mut tags, "ALBUM", "Generic EP");
+                put(
+                    &mut tags,
+                    "TITLE",
+                    format!("Track {} [Generic EP-{code}]", i + 1),
+                );
+                put(&mut tags, "TRACKNUMBER", i + 1);
+                Track {
+                    path: release.source.clone(),
+                    tags,
+                    duration: 0.15,
+                }
+            })
+            .collect();
+        let result = prepare_tags(
+            &release,
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+        );
+        if valid {
+            let plan = result.unwrap();
+            assert_eq!(plan.catalog, "ABC033");
+            assert_eq!(tracks[0].tags["TITLE"], ["Track 1"]);
+        } else {
+            assert!(result.is_err());
+        }
+    }
 }

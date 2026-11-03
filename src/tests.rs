@@ -118,7 +118,9 @@ fn capture_skips_preorders_missing_links_duplicates_and_completed() {
     let a = args();
     let (mut items, urls) = fixtures(6);
     items[0]["is_preorder"] = json!(true);
+    items[0]["release_date"] = json!(Utc::now().date_naive().to_string());
     items[1]["is_pre_release"] = json!(1);
+    items[1]["release_date"] = json!(Utc::now().date_naive().to_string());
     items[2]["sale_item_id"] = json!(900);
     items[3]["purchased"] = json!("invalid");
     let mut seen = HashSet::new();
@@ -871,6 +873,7 @@ fn private_collection_purchases_remain_eligible_without_public_metadata() {
         Some("https://daintees.bandcamp.com/album/juvenilia-2")
     );
     items[0]["is_preorder"] = json!(true);
+    items[0]["release_date"] = json!(Utc::now().date_naive().to_string());
     let mut selected = Vec::new();
     capture_page(&db, &a, &items, &urls, &mut HashSet::new(), &mut selected).unwrap();
     assert_eq!(selected.len(), 1);
@@ -878,7 +881,7 @@ fn private_collection_purchases_remain_eligible_without_public_metadata() {
 }
 
 #[test]
-fn capture_only_admits_flagged_singles_with_strictly_past_dates() {
+fn capture_admits_old_flagged_albums_and_past_singles() {
     let root = tempdir();
     let db = Database::open(root.join("collection.sqlite3").to_str().unwrap()).unwrap();
     let (mut items, urls) = fixtures(4);
@@ -890,6 +893,7 @@ fn capture_only_admits_flagged_singles_with_strictly_past_dates() {
     items[1]["release_date"] = json!(today.to_string());
     items[2]["release_date"] = json!(today.succ_opt().unwrap().to_string());
     items[3]["track_count"] = json!(2);
+    items[3]["release_date"] = json!((today - chrono::Duration::days(31)).to_string());
     let mut selected = Vec::new();
     capture_page(
         &db,
@@ -900,8 +904,9 @@ fn capture_only_admits_flagged_singles_with_strictly_past_dates() {
         &mut selected,
     )
     .unwrap();
-    assert_eq!(selected.len(), 1);
+    assert_eq!(selected.len(), 2);
     assert_eq!(selected[0].key, "album0");
+    assert_eq!(selected[1].key, "album3");
     fs::remove_dir_all(root).unwrap();
 }
 

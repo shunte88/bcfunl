@@ -334,6 +334,46 @@ fn ombra_catalog(value: &str) -> Option<(String, &str)> {
     None
 }
 
+/// Separate repeated album/catalog decoration from a track's actual title.
+pub fn track_title(raw: &str, album: &str) -> (String, Option<String>) {
+    let raw = raw.trim();
+    let album = album.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (open, close) in [('[', ']'), ('(', ')')] {
+        if raw.ends_with(close)
+            && let Some(pos) = raw.rfind(open)
+        {
+            let title = raw[..pos].trim();
+            let decoration = raw[pos + 1..raw.len() - 1]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !title.is_empty()
+                && !album.is_empty()
+                && decoration
+                    .get(..album.len())
+                    .is_some_and(|prefix| prefix.to_lowercase() == album.to_lowercase())
+            {
+                let tail = decoration[album.len()..].trim_start();
+                if let Some(code) = tail.strip_prefix('-').or_else(|| tail.strip_prefix(':')) {
+                    let code = code.trim();
+                    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+                    let descriptive_suffix =
+                        code.rsplit_once(char::is_whitespace)
+                            .is_some_and(|(head, tail)| {
+                                head.chars().any(|c| c.is_ascii_digit())
+                                    && tail.len() > 3
+                                    && tail.chars().all(char::is_alphabetic)
+                            });
+                    if catalog_token(&compact) && !descriptive_suffix {
+                        return (title_display(title), Some(code.to_uppercase()));
+                    }
+                }
+            }
+        }
+    }
+    (title_display(raw), None)
+}
+
 pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
     let mut text = raw.trim();
     let prefix = artist.trim();

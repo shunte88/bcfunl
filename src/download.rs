@@ -399,7 +399,7 @@ pub fn prepare(
         "Release publication date is in the future"
     );
     let stale =
-        preorder && crate::collection::released_single(single, &dates, Utc::now().date_naive());
+        preorder && crate::collection::stale_prerelease(single, &dates, Utc::now().date_naive());
     ensure!(!preorder || stale, "Release is a preorder/prerelease");
     let (format, url) = choose(&item["downloads"], args.format)?;
     if stale {
@@ -413,7 +413,7 @@ pub fn prepare(
             &[&cleaned, &args.user, &release.key],
         )?;
         eprintln!(
-            "  Ignoring stale preorder flag for a confirmed single-track release dated before today"
+            "  Ignoring stale preorder flag: single-track release before today or all release dates over 30 days old"
         );
     }
 
@@ -433,11 +433,8 @@ pub fn prepare(
         url,
         format,
         publish,
-        released_single: crate::collection::released_single(
-            single,
-            &dates,
-            Utc::now().date_naive(),
-        ),
+        released_single: single
+            && crate::collection::stale_prerelease(single, &dates, Utc::now().date_naive()),
         root,
         basename,
     })
@@ -544,7 +541,7 @@ fn refreshed_link(
     );
     ensure!(
         !(flagged(&data) || flagged(item))
-            || crate::collection::released_single(single, &dates, today),
+            || crate::collection::stale_prerelease(single, &dates, today),
         "Returned page is a preorder/prerelease"
     );
     let (format, url) = choose(&item["downloads"], preferred)?;
@@ -814,6 +811,8 @@ mod tests {
             (true, past, true),
             (true, today, false),
             (false, past, false),
+            (false, today - chrono::Duration::days(30), false),
+            (false, today - chrono::Duration::days(31), true),
         ] {
             let data = json!({"is_preorder":true,"download_items":[{"title":"Title","artist":"Artist","downloads":{"flac":{"url":"https://popplers5.bandcamp.com/download/track?fixture"}}}]});
             let html = format!("<div id='pagedata' data-blob='{data}'></div>");
@@ -831,7 +830,7 @@ mod tests {
         let html = "<script data-tralbum='{&quot;album_release_date&quot;:&quot;2023-01-01&quot;,&quot;is_preorder&quot;:true,&quot;trackinfo&quot;:[{}]}'></script>";
         let (dates, preorder, single) = release_metadata(html).unwrap();
         assert!(preorder);
-        assert!(crate::collection::released_single(
+        assert!(crate::collection::stale_prerelease(
             single == Some(true),
             &dates,
             today

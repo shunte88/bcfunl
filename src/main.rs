@@ -75,9 +75,12 @@ struct Args {
     /// Report processing stage durations, including failed stages
     #[arg(long, requires = "process")]
     timings: bool,
-    /// Tag and publish completed downloads without network lookups
+    /// Tag and publish downloads, enriching from Discogs when credentials are configured
     #[arg(long)]
     process: bool,
+    /// Process without Discogs network lookups
+    #[arg(long, requires = "process")]
+    offline: bool,
     /// Remove staged payloads only after successful verified publication
     #[arg(long)]
     clean: bool,
@@ -93,7 +96,7 @@ struct Args {
     /// Destination music library for --process
     #[arg(long, requires = "process", required_if_eq("process", "true"))]
     serverdir: Option<PathBuf>,
-    /// Discogs research SQLite library for missing-genre fallback (default: <output>/resources/library.sqlite3)
+    /// Discogs research SQLite library for --offline missing-genre fallback (default: <output>/resources/library.sqlite3)
     #[arg(long, requires = "process")]
     library: Option<PathBuf>,
     /// Relative output naming rule; the audio extension is appended
@@ -270,7 +273,7 @@ fn capture_page(
             ],
         );
         if flagged(item)
-            && !collection::released_single(
+            && !collection::stale_prerelease(
                 collection::single_track(item) == Some(true),
                 &collection::release_dates(item),
                 Utc::now().date_naive(),

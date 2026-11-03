@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-10-30 (America/New_York)
-Local release: **v0.1.27**, bounded audio read retries and detailed validation timings
+Updated: 2026-11-02 (America/New_York)
+Local release: **v0.1.39**, stale prerelease flags after 30 days
 
 ## Current outcome
 
@@ -1400,3 +1400,496 @@ and bounded retries. Determine whether native decoding can replace subprocesses
 without changing comparison semantics. No dependency/code changes requested for
 tonight. User says just make note and resume in the morning. Current job outcome
 remains unverified; no intervention or live environment changes made.
+
+## 2026-11-02: native media pipeline v0.1.29, gates green
+
+User authorized Symphonia/native metadata implementation referencing VCW, with
+multiple tracks and releases concurrently. Reviewed VCW export/tagging.rs native
+Vorbis, ID3 and MP4 routines and its Symphonia ALAC tests. Important distinction:
+VCW uses Lofty for metadata; available Symphonia0.6 code is ALAC test decoding,
+not a ready all-format runtime pipeline. Also reviewed VRipr Symphonia0.5 decode
+pattern. Implemented native adaptation in bcfunl without editing sibling repos.
+
+New src/processing/decoding.rs streams Symphonia0.5.5 packets into reusable
+RawSampleBuffer<f64>, hashes interleaved little-endian PCM SHA256 including rate
+and channel count. Decoder-per-file, strict errors, cancellation per packet,
+verify:true/final checksum, nonempty output, exact expected frame counts for
+lossless formats; lossy presentation counts cannot equal padded decoder frames.
+Existing bounded read-only retry retained. Symphonia0.5 AIFF SSND incorrectly
+counts8 header bytes as audio: read-only virtual source patches chunk length,
+never source file. Independent FFmpeg PCM oracle tests cover AIFF and other
+lossless formats, high-resolution PCM, truncation and channel identity.
+
+Replaced processing/tagging.rs subprocess/manual writers with Lofty0.25 native
+Vorbis/ID3/MP4 backends following VCW's approach. Preserve repeated custom fields,
+multiple artists/performers/sort names, artwork and unrelated metadata; consolidate
+MP4 multi-value atoms. Read legacy RIFF INFO/AIFF text as well as primary tags;
+synchronize alternate RIFF/AIFF/ID3v1/APE known fields on write. Clear discarded
+genre/catalog entries, including case variants. Raw JPEG/PNG covers keep actual
+format as folder.jpg/folder.png rather than transcoding artwork. No audio encode
+or remux required. Existing staged publication, no-overwrite, cleanup, SQLite
+history and verification policy preserved.
+
+One process-wide Rayon pool capped at min(available CPU parallelism,8) shares
+track tag reads, copy/tag/hash/readback/sync work, and existing-library comparisons
+across --parallel release workers. Source/output hashes use bounded Rayon join.
+No new CLI switch. Omitting --parallel still permits tracks within one release
+to run concurrently. Track task results are joined before temp cleanup or publish;
+subphase timings aggregate worker durations and can exceed wall time.
+
+Dependencies added Symphonia (only supported formats/codecs), Lofty, SHA2, Rayon.
+User ran cargo fetch on host because sandbox network unavailable; subsequently
+installed/made 7z visible. Docker runtime no longer installs FFmpeg/flac, CI runtime
+checks no longer require ffmpeg/ffprobe/metaflac. These tools remain independent
+host-side fixture/oracle test dependencies. No Mutagen runtime dependency before
+or after. README, reference, containers/TrueNAS guides and tag skill notes updated.
+Existing README art and public johnsmith/US spelling preferences preserved.
+
+Gates:117 tests passed,0 failed,2 ignored (existing parent-invoked fixture and
+manual benchmark); fmt, strict offline all-target Clippy, optimized build, shell
+syntax, maintenance/migration checks, git diff --check all passed. Manual optimized
+benchmark passed:60sec stereo96kHz FLAC native0.580s vs previous subprocess0.603s,
+rough parity, not a proven decode speedup/NAS benchmark. Independent synthetic
+smoke /tmp/bcfunl-native-smoke.py published/verified/cleaned6 formats FLAC,WAV,
+MP3,AIFF,ALAC/M4A,Ogg with PATH=/nonexistent; wall~0.017sec for tiny1sec fixtures.
+Added multiple-track/two-release shared pool test and unknown-tag/genre/legacy
+store regression coverage. Tests/fixtures stay disposable; production data untouched.
+
+Cargo.toml/Cargo.lock bumped to0.1.29. Binary:
+bcfunl v0.1.29 (built 2026-11-02T18:13:43Z).
+No commit, push, Docker build, registry publish or NAS deployment performed by
+agent. User's next push/image build and NAS --timings acceptance required; do not
+promise NAS throughput from local fixtures. Current scheduled acquire/process
+completion remains unverified; previous cron root-user fix and date flag/cap
+handoff still apply. User previously planned restore dates after active run.
+
+## 2026-11-02: v0.1.30 multiline lyrics and semicolon credits
+
+User local acceptance:10 attempted,9 published/cleaned,1 failed Face Stabber with
+"Multiline tag requires review". Read-only inspection of retained archive's FLAC
+Vorbis headers found CRLF multiline UNSYNCEDLYRICS on11 tracks, not malformed
+artist fields. Did not print lyric contents. Old newline validation was obsolete
+with native writers. Removed newline/CR restriction on values, still reject NUL
+and invalid keys; lyrics/comments/free text line breaks retained.
+
+Added explicit semicolon splitting to shared parsed_names (used by artist_names
+and split_fields). Expanded related credit fields composer/conductor/lyricist/
+writer/producer/engineer/arranger/mixer/DJmixer/orchestra/ensemble. Native writer
+normalizes cloned tags at boundary so semicolon genre/credit strings also work
+for direct calls. Trim/drop empties/dedup credits, no splitting title/lyrics or
+arbitrary commas/ampersands. Exact artist mapping behavior otherwise unchanged.
+
+Regression covers all7 format variants (FLAC,WAV,MP3,AIFF,ALAC,M4A-AAC,Ogg),
+semicolon multi-values for10 credit keys plus genre, title literal semicolon,
+CRLF lyrics byte-for-byte, PCM unchanged.118 tests passed,0 failures,2 ignored;
+fmt, strict all-target offline Clippy, optimized release build, shell syntax,
+maintenance/migration scripts and diff whitespace checks all passed.
+
+Actual retained Face Stabber track07 copied from original ZIP to disposable /tmp
+staging, processed/published only to disposable /tmp destination, PATH=/nonexistent.
+Success, exact original lyric bytes retained and source unchanged. Wall1.202sec
+for this ONE track, not full album/NAS benchmark. Original production ZIP and
+/data/bcfinal and live collection history not modified by agent. Failed archive
+remains available for user's retry. Nine successes remain as reported by user.
+No attempt to fix stylized Unicode Ombra catalog in ZHENG title or comma-separated
+performer naming; outside this requested fix.
+
+Cargo.toml/Cargo.lock now0.1.30; binary bcfunl v0.1.30
+(built 2026-11-02T18:28:37Z). docs/REFERENCE.md and tag-rules updated. No image
+build/deployment, commit or push by agent. Local test binary ready; NAS image
+requires normal successful push build/redeploy. Native pipeline earlier changes
+remain in workspace diff alongside this follow-up. Memory/status saved.
+
+## 2026-11-02: v0.1.31 comma-separated credit lists
+
+User explicitly requested comma-space artist lists (Six Strings release:
+Amevicious, Phred Noir, Bardamu, Nici Palm, Rødel, Akrav) use same expansion as
+semicolons. Updated shared credit parser with comma-space marker, disabled for
+sort fields so surname commas survive. Whole artist-map matches precede splitting;
+added single canonical Earth, Wind & Fire mapping to preserve existing band-name
+regression. Unmapped literal-comma artist names now need artist-map exceptions.
+Read-only split_fields preserves whole mapped identities for later expansion.
+All callers use the shared parser: input normalization, performer/related credits,
+known artists and native writer boundary. Existing primary-album-artist/folder
+policy unchanged: Six Strings test uses primary Amevicious, all six track artist/
+performer values retained. Sort fields can still use semicolon between names.
+Titles/lyrics/free text keep commas. No arbitrary bare comma delimiter added.
+
+New regression covers six native container types, all six artist values on tag
+round trip, TrackArtist/Performer expansion through prepare_tags, surname sorts,
+literal title comma and mapped Earth, Wind & Fire preservation.119 tests passed,
+0 failed,2 ignored; fmt, strict all-target offline Clippy, optimized build and
+diff whitespace checks passed. Version0.1.31 in Cargo.toml/Cargo.lock; binary
+bcfunl v0.1.31 (built 2026-11-02T18:52:43Z). docs/reference and skill rules updated.
+No live media/history retag/rename, deployment, push or commit performed. Previously
+published Six Strings was already cleaned in user's run, so this code fix alone
+does not retag or rename that existing server copy; no overwrite bypass added.
+Earlier native media and0.1.30 lyric fixes remain in current workspace diff.
+
+## 2026-11-02: v0.1.32 track-level source credits take precedence
+
+User requested direct source tag dump for Six Strings. Read retained ZIP's FLAC
+headers without transformations: track1 The Atonement ARTIST=Amevicious, Phred
+Noir; track2 Strange People ARTIST=Bardamu; track3 Functional Freeze ARTIST=Nici
+Palm, Rødel; track4 Satanisch ARTIST=Akrav, Solas. No TRACKARTIST fields present.
+Solas is present on actual track4 despite absent collection-level artist roster.
+
+User clarified individual source-track artists must populate TRACKARTIST and
+PERFORMER with expansion. Audit found0.1.31 still seeded album primary on each
+non-Various track, so correction required. prepare_tags now seeds first actual
+track ARTIST then merges its remaining ARTIST/TRACKARTIST/remixer/title/explicit
+guest values; falls back to album primary only without actual track names.
+Preserved previous explicit guest/remixer ordering (David Holmes regression).
+Does not prepend an unrelated album primary or whole collection artist roster.
+Album-level ARTIST/ALBUMARTIST/folder policy otherwise unchanged.
+
+New four-track regression reproduces source comma credits with full collection
+roster as album artist; asserts exact TRACKARTIST/PERFORMER pairs per track,
+including Bardamu alone and Akrav/Solas, then native FLAC round trip.120 tests
+passed,0 failed,2 ignored; fmt, strict Clippy, optimized build and diff whitespace
+checks passed. Cargo version0.1.32; binary bcfunl v0.1.32
+(built 2026-11-02T19:07:40Z). Reference documentation updated. Native implementation
+and earlier fixes still present in workspace diff. No live music/history changes,
+image deployment, commit or push performed. User can test rebuilt local binary;
+previously published files are not automatically retagged.
+
+## Appointment break handoff
+
+User requested memory/status saved before leaving for appointment. Current local
+binary v0.1.32 (built 2026-11-02T19:07:40Z), with native Symphonia/Lofty pipeline,
+bounded shared file workers, multiline lyrics, comma/semicolon credit expansion,
+and corrected per-track artist/performer precedence.120 tests passed,0 failed,
+2 ignored; formatting, strict all-target offline Clippy, optimized build and
+whitespace checks passed. Exact four Six Strings combinations verified in
+regression, not yet user full-release acceptance for0.1.32. Source ZIP unchanged.
+
+Next: user tests local rebuilt binary, ideally --timings and inspection of
+TRACKARTIST/PERFORMER on all four tracks. Track4 must include Solas; track2 must
+be Bardamu alone. No unrelated album artist should be prepended. Already published
+copies are not automatically retagged and no overwrite bypass was introduced.
+All changes remain local workspace work; no commit/push or Docker image deployment
+by agent. Do not start processing, cleanup or remote work during user break.
+
+## 2026-11-02: v0.1.33 Discogs release enrichment and curated genre controls
+
+User requested Discogs release lookups, especially missing catalog, preferred
+Discogs genre/style over Bandcamp, and correct EBM descriptive alias expansion.
+User clarified ONLY identity requirements are artist,title,country, stressing
+curated genres grew from~700 to3000+. No server scrub authorized or performed.
+
+New processing/discogs.rs reuses existing VCW Discogs provider and Client with
+custom reqwest Transport (no curl/ureq/external tools). Provider net feature
+remains off, bcfunl supplies existing reqwest HTTP. One shared Lookup per run,
+all release threads share VCW60/min limiter,1-day disk cache, retry/timeout,
+SignalClock Cancel wired to app shutdown. Reqwest one-worker shared Tokio runtime
+(rt-multi-thread feature added), HTTPS api.discogs.com only, no redirects or
+cookies,8MiB response cap, authheaders marked sensitive. Tokens loaded from
+VCW_DISCOGS_TOKEN,DISCOGS_TOKEN,DISCOGS_API_TOKEN, never URLs/logs/cache/DB.
+Token EXISTS in current execution environment (value not inspected/printed).
+
+Searches artist/title then verifies candidate AND fetched detail artist/title/
+ISO-normalized country (case/punctuation insensitive). Country missing/unknown
+stays unresolved; no artist-only or title-only match. No trackcount/format
+restriction per user's explicit clarification. Matching editions must agree on
+normalized genre/style sets, otherwise no match. Catalog filled only when all
+matched editions have same non-placeholder catalog; existing source catalog
+preserved. Search provider's bounded candidate set applies, no claim to infer a
+specific pressing beyond those identity criteria. Known aliases use primary
+source artist; no fuzzy guessing.
+
+Enrichment before prepare_tags/template/existing scan: confirmed genres/styles
+REPLACE embedded/Bandcamp genres, do not merge polluted source vocabulary.
+Catalog usable in template. Native tags DISCOGSID (possibly multiple) and
+BCFUNL_GENRE_SOURCE store evidence. New nullable releases.discogs_metadata column
+migrated with existing ALTER logic; manifest also holds evidence. applied=false
+for equivalent existing server copy skipped unchanged, true on new successful
+publication. Existing source releases.genre still Bandcamp capture evidence;
+confirmed provider collection retained in discogs_metadata. No overwrite bypass,
+existing completed rows still skip. User needs fresh destination/new staged
+payloads for end-to-end enrichment acceptance; no retroactive file retag.
+
+New --process --offline suppresses credential/network provider initialization.
+Default processing uses lookup if token available; missing credentials warn once.
+Unmatched/offline source genres are restricted to recognized shared/local map
+inputs before normal hygiene/expansion. Bandcamp capture applies same recognition
+filter. Artist-default resource fallback only passed during explicit --offline,
+so online unresolved releases do not get artist-only estimates lacking country/
+title confirmation. Offline library remains provenance-marked lower-confidence
+existing feature. Explicit library schema checks still happen at startup.
+
+Optional async user question asked whether unmatched should retain recognized
+source genres or be empty; no answer received. After ample time defaulted to
+recommended recognized-only and stated assumption in commentary. A later reply
+can change this policy. Do not claim user explicitly selected it.
+
+New data/genremap.dat overrides EBM, Electronic Body Music and descriptive
+"EBM - electronic body music" => EBM;Electronic. Shared VCW built-in plus local
+map OnceLocks, all inputs/outputs hygiene validated. Canonical short uppercase
+acronyms (EBM,IDM,etc) retained instead of forced Ebm/Idm. Tests adjusted to IDM.
+Local map is embedded; rebuild after edits. Sibling VCW/mcfunl not modified.
+Source unknown alphabetic phrases no longer freely enter capture/published genre;
+confirmed Discogs structured styles may pass unknown mapping, per trust policy.
+
+Compose forwards all3 token aliases; .env.example token blank. Current Compose
+contains user's acquire/process entrypoint and required BCFUNL_COLLECTION and
+BCFUNL_TEMPLATE (preserved). Added johnsmith/default-template entries to example
+so supplied example validates; did not change private .env. README/reference/
+container guides/tag rules/dataREADME updated for online/--offline, metadata
+precedence, strict matching, acronym handling and provenance. Existing art and
+US English/no em dash/generic owner maintained.
+
+Validation:127 automated tests passed,0 failures,3 ignored (parent subprocess
+fixture, manual decode benchmark, manual live API check). Strict offline all-target
+Clippy, fmt, optimized build, maintenance shell/Python checks, SQL migration script
+checks, Compose --env-file .env.example config --quiet, diff whitespace passed.
+Fixtures test3-field rejection, agreeing/conflicting editions/catalog ambiguity,
+existing catalog preservation, publication catalog template and authoritative
+genres/provenance, unknown-source rejection, EBM expansion and IDMacronym.
+Processing unit tests explicitly --offline even if host has token. Native-only
+6format PATH=/nonexistent smoke with --offline still publishes/verifies/cleans.
+
+Manual live API smoke was attempted separately with token, FAILED because sandbox
+cannot resolve api.discogs.com: failed to lookup address information/Name or
+service not known. Not a successful live lookup; preserve this limitation in
+reporting. Public Discogs developer docs also403 through web; provider behavior
+reviewed directly from working VCW/mcfunl sources. No API credential printed.
+No production music/history/data scrub, image build/deploy, commit or push by
+agent. Provider fixtures passed; real host/NAS API acceptance still required.
+
+Current Cargo.toml/lock version0.1.33; binary:
+bcfunl v0.1.33 (built 2026-11-02T23:12:28Z).
+All native0.1.29+ fixes and tag credit fixes remain in workspace changes.
+Earlier tag dump exists /data2/bcfunl/test_tags.txt (10releases89FLAC); exact
+/data2/test_tags.txt target outside writable roots, user given cp command.
+
+## 2026-11-02: v0.1.34 Osees retrieval aliases and Worldwide country
+
+User reports manual Discogs Osees/Off Course search hits with catalogDG011 but
+processing said no confirmed match. Read-only checked /data/bcfstg DB: artist
+Osees / The Oh Sees / Thee Oh Sees / Oh Sees, titleOFF COURSE, countryUS, no
+catalog/discogs metadata. Read cached response under resources/discogs-cache:
+structured API query artist=Osees&release_title=OFF%20COURSE returned pagination
+items0/results[]. So original rejection occurred before country or catalog
+checks. Do not claim the zero result was definitively caused by alias indexing;
+API structured search differs from user's browser retrieval, and no fallback
+existed. Existing matching also compared only primary spelling, ignoring aliases.
+
+User clarified Bandcamp first-position artist flavor should stay primary and
+music-server aliases enable browsing same band across name variants. Added
+artist_aliases from reciprocal map entries only: expansion members/guests are
+not automatically identity aliases. All4 Osees mappings mutually link and qualify;
+Nick Cave membership in group expansion does not qualify without reciprocal link.
+Query primary then all confirmed aliases, accumulate/de-duplicate release IDs
+across these queries. Title-only retrieval fallback only if all structured queries
+produce no valid matches. Candidate AND fetched detail still require recognized
+alias, title, country. Source primary naming and server credit expansions kept.
+Improved diagnostics show each query candidate count and rejection reason/ID.
+Cached empty primary searches do not prevent new alias URLs/fallback; no cache
+clearing required for those new queries.
+
+User provided https://www.discogs.com/release/37546071-Osees-Off-Course,
+attributed Osees, catalogDG011, countryWorldwide, and explicitly requested
+Worldwide match any source country. Web page403 here, so these specifics are
+user-provided, not independently fetched. Added explicit Worldwide wildcard at
+candidate/detail checks, case-insensitive/trimmed. Preserves source ISO in tags/
+filename, never invents a Worldwide ISO. Source-country unknown can match ONLY
+Worldwide details; blank/unknown provider country does not match. Europe normalized
+toEU, still requiresEU; UKvsUS and EuropevsGB rejected. Provenance now records
+matched_artists, matched_countries and country_policy=exact-or-worldwide.
+The previous detail check would have rejected Worldwide even had search found it.
+
+Also removed an unintended fourth match blocker: genre/style differences among
+identity-matched editions no longer discard a shared catalog. Catalog consensus
+is independent; choose shared normalized genre/style intersection conservatively,
+not a union that adds extra styles. Record genre_policy=shared-classifications.
+Only artist/recognized alias,title,country-orWorldwide establish identity; no
+trackcount/format restriction. Existing nonempty source catalog still wins.
+
+Fixture regressions cover initial Osees0results, alias TheeOhSees match DG011,
+title-only retrieval fallback, wrong country and unrelated artist rejection,
+non-alias group members, worldwide withUS/GB/DE/unknown source and unchanged
+sourcecountry. Catalog retained when editions differ on styles, shared genre
+only.129 automated tests passed,0 failed,3 ignored. fmt, strict Clippy, optimized
+build, diff whitespace and Compose example validation passed. No live Off Course
+API acceptance test here; previous sandbox DNS restriction still applies.
+
+Cargo version0.1.34; final binary:
+bcfunl v0.1.34 (built 2026-11-03T00:27:47Z), still Nov2 local US/Eastern.
+README/reference/tag rules updated. No production audio/history/cache writes,
+retagging, scrub, Docker image deployment, commit or push by agent. Existing
+published copies still skip; user needs fresh destination/new payload test to
+observe new metadata. All earlier native media, credit and Discogs changes remain
+in local workspace diff. Memory/status saved.
+
+## 2026-11-02: v0.1.35 Discogs alternate-name asterisk comparisons
+
+User's live v0.1.34 lookup now retrieves release37546071 but rejected candidate
+artist "Osees*" as not an alias. User explains trailing Discogs asterisk marks
+alternate-name attribution, requested strip during compare and case-insensitivity.
+Root cause: shared processing key() only collapses whitespace and ASCII lowercase,
+not punctuation. Earlier memory/docs had incorrectly described punctuation-
+insensitive matching; corrected reference. No global key or title behavior change.
+
+Added shared same_artist(): trim ends, remove trailing asterisks, collapse
+whitespace, Unicode lowercase, compare nonempty. Applied to candidate artists,
+fetched detail artist, reciprocal alias comparisons/dedup. Alias-map lookup strips
+trailing marker from lookup key too; actual stored names/credits remain intact.
+Internal asterisks and title punctuation retained; no arbitrary fuzzy matching.
+Existing artist/title/country-orWorldwide validation, catalog consensus and source
+primary naming preserved. Cached raw results re-evaluate under new comparator;
+no cache clearing needed just for this fix.
+
+Regression includes mixed-case oSeEs* search artist, OSEES* fetched artist,
+Worldwide country and DG011 catalog, through existing alias/fallback test path.
+Direct checks cover lowercase/Unicode RØDEL vs rødel, whitespace, internal star
+not matching unstarred, empty-star name rejection and unchanged title-star rules.
+130 automated tests passed,0 failed,3 ignored; fmt, strict all-target offline
+Clippy, optimized release build and diff whitespace checks passed.
+Cargo.toml/lock0.1.35; binary bcfunl v0.1.35
+(built 2026-11-03T00:52:03Z), Nov2 local America/New_York.
+Reference docs updated. No live API request, production media/history edits,
+server retag, Docker deployment, commit or push performed by agent. User's next
+rerun needed to confirm actual release metadata application; existing server
+publications still skip rather than being retagged automatically.
+
+## 2026-11-02: v0.1.36 simplify Discogs selection, composite countries
+
+User reports country "UK & US" rejected despite sourceUS, multiple Discogs IDs
+captured but missing metadata, requests first-list fallback rather than continued
+candidate consensus. Wants deterministic closure and move on if no candidate,
+asks whether agent more appropriate. Responded deterministic matching belongs in
+executable; no tag-agent delegation required or started.
+
+Read actual cached Osees responses and read-only history. Concrete catalog bug:
+record37546071 labels[0].catno="DG 011", other matching records="DG011". Exact
+BTreeSet catalog consensus incorrectly suppressed the catalog because of spaces.
+Previous history did contain Rock/Krautrock from intersection, applied=true and
+multiple IDs; do not claim no genres were applied. No live data/history modified.
+
+Removed all-edition catalog consensus, style intersections, multi-ID pooling and
+fetching further eligible candidates. Lookup now returns immediately on FIRST
+candidate in provider result order passing artist/alias,title,country checks.
+Its single record supplies catalog and full normalized genre/styles, exactly one
+DISCOGSID. Preserve existing nonempty source catalog. Query primary/aliases/title
+fallback sequence remains, but stops at first valid fetched record. If no match,
+print reason and retain recognized source genres, move on. Network errors remain
+reported/nonfatal enrichment failures. No weaker unrelated-artist match added.
+
+Country matcher checks recognized whole names first, then listed components split
+on &, comma, slash or semicolon, ISO-normalized. UK & US and UK&US matchGB orUS;
+US, Canada acceptsCA; Europe & UK acceptsEU/GB; unlistedDE rejected. Worldwide
+wildcard and source-country preservation unchanged. This avoids requiring an
+agent to interpret simple country lists.
+
+User explicitly requested tests WITH and WITHOUT catalog spaces. Regression
+runs both candidate orders: DG011 first / DG 011 second, and reversed. Catalog
+is populated from first record and exact chosen spelling preserved. Different
+later catalog/genres cannot suppress first metadata. One chosen ID and source-
+catalog precedence asserted. No forced catalog whitespace removal (other
+catalogs legitimately have spaces). Composite country no-space variant tested.
+
+Manual READ-ONLY cache replay test (new ignored test controlled by
+BCFUNL_TEST_DISCOGS_CACHE env) parsed actual cached37546071 response through VCW
+Discogs provider then applied selected metadata: catalog DG 011, genres
+Rock;Krautrock, sole ID37546071, source countryUS retained. PASSED, no live HTTP
+and no music writes. This proves actual response parsing/application, not live
+search order or full production publication. Synthetic lookup tests cover first
+candidate order and parser variants. Existing actual38597223 detail was not
+fetched by agent; new composite rule allows host to fetch it on next run.
+
+131 automated tests passed,0 failed,4 ignored (previous3 plus manual cache replay,
+which was separately run and passed). fmt, strict all-target offline Clippy,
+optimized build, diff whitespace, Compose example, maintenance shell/Python and
+SQL migration checks passed. README/reference/tag rules updated to remove old
+consensus/intersection policy and document first eligible record and composites.
+No token values printed, no sibling repo edits, production retags/history/cache
+writes, image deployment, commit or push by agent. Existing server copies still
+skip unchanged; user needs fresh destination to test newly written metadata.
+
+Current Cargo version0.1.36; binary bcfunl v0.1.36
+(built 2026-11-03T01:17:19Z), Nov2 local America/New_York.
+Memory/status saved. User preparing one final host acceptance pass; if unresolved,
+move on rather than broadening arbitrary matching. Live acceptance still pending.
+
+## Test dump refresh and catalog punctuation regression
+
+User requested test-set tag dump at previous /tmp/test_tags.txt and catalog test
+coverage with/without spaces and hyphens. Refreshed raw metaflac exports for10
+published releases/10directories/89FLAC under /data/bcfinal to /tmp/test_tags.txt.
+No audio writes. Extended existing first-eligible catalog regression to all12
+ordered unequal pairs of DG011, DG 011, DG-011, DG - 011. Selected catalog spelling
+preserved, one Discogs ID, full selected genres, existing source catalog precedence
+asserted. Focused regression, strict all-target Clippy, fmt and whitespace passed.
+Tests-only change; runtime and local release stayv0.1.36, no new release build or
+live API/deployment performed. User's overall acceptance still pending.
+
+## Generic track-title catalog extraction, v0.1.37
+
+Stue requested a label-independent rule, not per-label mappings. Trailing
+[album-catalog] or (album: catalog) track decorations now supply a missing
+release catalog and are removed from track titles. Catalog tokens use existing
+validation; spaces/hyphens compare equivalently. Existing confirmed catalogs win;
+conflicting inferred codes require review. Ordinary remix/remaster suffixes and
+references to another album are preserved. Literal catalog spelling is uppercased,
+not guessed into a label name: Sex [Chiodi EP-Ombrantl033] becomes TITLE=Sex and
+CATALOGNUMBER=OMBRANTL033, used by album decoration and catalog_num templates.
+
+133 tests passed, 0 failed, 4 ignored. Formatting, strict all-target offline
+Clippy, release build and diff whitespace checks passed. Binary v0.1.37 built
+2026-11-03T01:42:48Z. A temporary copy of the actual SLF IMG track published
+without external tools and independent metaflac readback confirmed title,
+catalog and catalog-bearing folder. Original music remained untouched.
+No deployment or live library retagging performed. Existing publications still
+skip unchanged; use a fresh destination for acceptance testing.
+
+## v0.1.38: year-qualified edition notes in Discogs lookup
+
+Generic search-only title cleanup strips trailing year-qualified Remaster,
+Remastered, Reissue, Reissued, RM/RE notes, including re-issued/re-mastered,
+parentheses, brackets, dash suffixes, and reversed year order. Applied both to
+search query and candidate/detail comparison. Source ALBUM, display titles and
+folders unchanged. Requires a 1900-2099 year plus an edition keyword and only
+recognized modifier words; remix/live/bonus-track text remains significant.
+Mclusky (2026 Remaster) regression and fixture query/assertions pass. Existing
+artist/country rules and first eligible result selection unchanged; cannot prove
+the precise pressing from normalized title.
+Research: Discogs Title guidelines specify main title; Format guidelines 6.1.5
+place distinguishing non-title edition information in format free text. User's
+38076354 release page could not be fetched in this environment, so no claim of
+live matching that record. No credentials printed or live library edits.
+134 tests passed, 0 failed, 4 ignored; fmt, strict offline all-target Clippy,
+release build and whitespace checks passed. Version bumped to v0.1.38.
+
+## v0.1.39: stale preorder flags after 30 days
+
+Refreshed /tmp/test_tags.txt from 10 test releases / 89 FLAC, read-only metaflac.
+User requested stale prerelease override for releases over 30 days old. Shared
+collection::stale_prerelease now permits any track count when all available
+release dates are strictly more than 30 UTC calendar days old. Existing confirmed
+single-track-before-today exception retained and communicated. Exactly 30 days,
+missing dates, and conflicting recent/future dates remain blocked for albums.
+Capture, preparation and refreshed download links share this predicate. Keep
+Prepared.released_single restricted to actual singles so album age evidence is
+never misinterpreted as single-track evidence during refresh. Processing strips
+explicit prerelease markers from all qualifying tracks, not just track zero.
+Captured source titles retained; no publication overwrite or live changes.
+134 tests passed, 0 failed, 4 ignored. Boundary/conflicting dates, album capture,
+refresh, and multi-file marker cleanup covered. fmt, strict offline all-target
+Clippy and diff whitespace passed; optimized release built as v0.1.39.
+No deployment or live acquisition performed.
+
+## Acceptance and requested repository publication
+
+Stue reviewed the latest ten-release tag dump and confirmed the tags look good.
+Metadata refinement is closed for this session; do not broaden matching or add
+more speculative rules. Current release v0.1.39, 134 automated tests passed,
+0 failed, 4 ignored; fmt, strict Clippy and optimized build passed. User explicitly
+authorized committing and pushing the accumulated native media, tagging, Discogs,
+genre, catalog/title and stale-prerelease changes to origin/main. Commit/push
+completion must be verified from Git, not inferred from this request.
+
+Publication blocked by session filesystem permissions: git add -u failed with
+"Unable to create /data2/bcfunl/.git/index.lock: Read-only file system". The Git
+metadata directory is read-only in this session. No commit or push occurred.
+Application files and memory/status remain saved. Resume commit/push from a
+session with writable Git metadata, or run the supplied host commands.

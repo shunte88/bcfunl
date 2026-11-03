@@ -93,6 +93,7 @@ impl Database {
             ("last_attempt_date", "TEXT"),
             ("genre", "TEXT"),
             ("genre_fallback", "TEXT"),
+            ("discogs_metadata", "TEXT"),
             ("country_iso", "TEXT"),
             ("release_url", "TEXT"),
             ("catalog_num", "TEXT"),

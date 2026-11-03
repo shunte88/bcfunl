@@ -21,9 +21,6 @@ All runtime utilities must be available on PATH for the relevant mode:
 | --- | --- | --- |
 | `aria2c` | Parallel transfers | Download mode with `--parallel` |
 | `7z` | Validate and extract release archives | Processing ZIP archives |
-| `ffprobe` | Inspect audio, tags, and artwork | `--process` |
-| `ffmpeg` | Verify decoded audio, extract artwork, and remux supported containers | `--process` |
-| `metaflac` | Read and write FLAC tags and artwork | Processing FLAC |
 | `gzip` | Stream and validate compressed XML extracts | `--resources` with gzip input |
 | `sha256sum` | Verify resource checksums | `--resources` |
 
@@ -31,10 +28,9 @@ Install the complete runtime utility set on Ubuntu/Debian:
 
 ```sh
 sudo apt update
-sudo apt install aria2 7zip ffmpeg flac gzip coreutils libsqlite3-0
+sudo apt install aria2 7zip gzip coreutils libsqlite3-0
 ```
 
-The `flac` package provides `metaflac`, `ffmpeg` provides `ffprobe`, and
 `coreutils` provides `sha256sum`. Older distributions may provide `7z` through
 `p7zip-full` instead of `7zip`.
 
@@ -67,7 +63,8 @@ Options:
 | `--timings` | With `--process`, report per-release stage times, history checks, and cleanup duration, including failed stages. |
 | `--summary` | Download mode prints the run status table; processing prints attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
-| `--process` | Tag, verify and publish completed downloads offline. |
+| `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
+| `--offline` | Disable Discogs network requests during processing. |
 | `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
 | `--serverdir` | Required library destination for processing. |
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
@@ -185,8 +182,8 @@ files were later moved or removed.
 
 ## Process downloaded releases
 
-Processing is offline and uses completed rows in `<output>/collection.sqlite3`
-plus embedded audio tags. Start with a small batch:
+Processing uses completed rows in `<output>/collection.sqlite3`, embedded audio
+tags, and optional Discogs release enrichment. Start with a small batch:
 
 ```sh
 cargo run --release -- --process --user johnsmith \
@@ -226,17 +223,17 @@ removed from album names. Other embedded fields are retained. Commas inside
 names and band names such as `Earth, Wind & Fire` remain intact. Compilations
 retain individual track credits under Various Artists.
 Embedded album/country/catalog values take precedence over SQLite fallbacks;
-SQLite genres supplement existing track genres. Processing normalizes their
-combined values through the shared `vcw_metadata::Genres` routine used by
-mcfunl, retaining unknown values and deduplicating case insensitively. Discogs
-genres and styles use this same routine when provider enrichment is connected. The ALBUM tag includes known country and
+Confirmed Discogs genres/styles replace embedded/Bandcamp genres; without a
+confirmed match, only source values recognized by the transformation table are
+retained. Shared VCW transformations, local overrides, hygiene rules and
+case-insensitive deduplication apply to all selected genres. The ALBUM tag includes known country and
 catalog suffixes. Cover images are retained, and an archive cover or embedded
-picture supplies `folder.jpg` when available.
+picture supplies `folder.jpg` or `folder.png` according to its actual format.
 
-Requirements: Linux or macOS, `7z` for ZIP archives, `ffprobe`, `ffmpeg`, and `metaflac` for
-FLAC tags. FLAC, WAV, MP3, AIFF, ALAC/AAC in M4A, and Vorbis/Ogg retain their audio
-format. Native FLAC/WAV/MP3 tagging is reused from mcfunl; other containers are
-remuxed with audio stream copy. Every prepared track must preserve its decoded
+Requirements: Linux or macOS and `7z` for ZIP archives. Native Rust libraries handle
+metadata, artwork and audio decoding. FLAC, WAV, MP3, AIFF, ALAC/AAC in M4A, and
+Vorbis/Ogg retain their audio format. Lofty updates container metadata without
+audio transcoding. Every prepared track must preserve its decoded
 PCM SHA-256 (including sample rate and channel layout) and round-trip the expected tags before publication. No audio
 transcoding or provider lookup is performed. CUE releases, unsupported RF64/ID3
 variants, missing titles/track numbers, and conflicting metadata require review;
@@ -331,17 +328,16 @@ metadata failures, retries, forced downloads, and interrupted attempts. Skipped
 completed releases do not increment it. Existing databases are migrated
 automatically; historical attempts start at zero because they were not recorded.
 
-Publication dates come from collection/download metadata, or the release page
-when needed. Unavailable dates remain SQL NULL. Preorders and future
-publication dates are rejected, except confirmed single-track releases whose
-available date evidence is strictly before today (UTC). Same-day, future,
-unknown-date, conflicting-date and multi-track releases do not qualify. One
-`download_items` entry alone is not single-track evidence. The same exception
-applies to refreshed download links. For past single-file releases, processing
-removes explicit bracketed `(pre-release)`/`[pre-release]` markers from derived
-album and track titles while preserving the original captured release title. A preorder discovered on a download page counts
-as an attempted release but is not marked complete. Some releases can still
-have markup-only labels the current schema does not expose.
+Publication dates come from collection/download metadata or the release page.
+Unavailable dates remain SQL NULL. A preorder/prerelease flag is considered stale
+when every available release date is more than 30 UTC calendar days before today,
+for any track count. Exactly 30 days does not qualify. The existing exception for
+confirmed single-track releases dated strictly before today also remains.
+Missing dates or conflicting recent/future dates prevent the exception. Purchase
+dates do not establish release age. The same rules apply to refreshed download
+links. Processing removes explicit bracketed prerelease markers from derived
+album and track titles for qualifying releases, preserving captured source titles.
+One downloadable item alone does not prove single-track cardinality.
 
 A non-NULL `download_date` skips that entry unless `--force` is supplied.
 Failures preserve any previous successful completion date and file. The utility
@@ -571,13 +567,14 @@ the Rust HTTP acquisition path hit sandbox DNS restrictions during this session.
 ## Missing-genre fallback in tag sanitizing
 
 ```sh
-./target/release/bcfunl --process --user johnsmith \
+./target/release/bcfunl --process --offline --user johnsmith \
   --output /data/bcfstag3 --serverdir /data/bcfinal-test \
   --library /data2/bcfunl/downloads/resources/library.sqlite3 --count 3 --summary
 ```
 
-Without `--library`, processing uses `<output>/resources/library.sqlite3` when
-present. An absent implicit library preserves the previous offline behavior.
+In `--offline` mode, without `--library`, processing uses
+`<output>/resources/library.sqlite3` when present. Online processing does not apply
+artist-default estimates because they do not confirm release title and country. An absent implicit library preserves the previous offline behavior.
 An explicitly requested missing or invalid library fails before processing;
 the library is always opened SQLite read-only and never created or modified.
 
@@ -722,9 +719,9 @@ becomes `Ambient`, `post-punk` becomes `Post-Punk`; numeric descriptions such as
 `80s` and `2-step` are rejected under this policy. If every existing value is
 rejected, remove GENRE so the existing missing-genre fallback can apply.
 
-These checks do not constitute live Discogs release confirmation or a fixed
-curated genre vocabulary. Unknown alphabetic terms and unrelated artist names
-not present in known credits/the artist map can remain. Existing published
+Bandcamp capture and unmatched source genres now require a recognized mapping.
+Confirmed Discogs genre/style collections still pass through mapping and hygiene;
+unknown provider terms can remain because they come from the matched release. Existing published
 library files are not rewritten automatically; use a fresh destination when
 validating new tagging behavior. Raw Discogs research imports remain evidence;
 fallback values are filtered when applied to tracks.
@@ -780,8 +777,7 @@ and `file_sync` durations. Partial totals are printed on failure. PCM hash timin
 includes layout probing and any retry. Each track is fully decoded twice for
 source/output comparison, so cost depends on total audio duration/resolution,
 CPU, storage, and concurrent releases, not just compressed archive size.
-FLAC tag readback uses native comments directly and avoids an unnecessary
-ffprobe duration/stream probe; the same alias/multivalue normalization is retained.
+Tag readback uses native container metadata without a subprocess duration probe; the same alias/multivalue normalization is retained.
 This is a limited overhead reduction, not a measured guarantee that a full album
 will validate within a few seconds.
 
@@ -791,3 +787,123 @@ cache does not trigger this cutoff because collection displays can be curated.
 Pages with missing purchase dates keep scanning. `--todt` alone cannot stop an
 older-page scan early. Both bounds remain inclusive; `--count` limits eligible
 unfinished releases, not the number of collection entries inspected.
+
+Processing reads and writes metadata with Lofty and validates decoded audio with
+Symphonia, following VCW's native container handling. FFmpeg, ffprobe, metaflac,
+and Python/Mutagen are not runtime requirements. FFmpeg and metaflac remain
+independent test tools for fixture generation and comparison.
+
+`--parallel` controls concurrent releases. Track reads and copy/tag/verification
+jobs share one process-wide pool capped at eight workers and available CPU
+parallelism. Multiple releases share this pool rather than each creating a new
+track pool. Omitting `--parallel` processes one release at a time while its tracks
+can still run concurrently. Timing components sum track work and may exceed wall
+time. Publication waits for every track worker and all verification checks.
+
+Semicolon-delimited artist, performer, sort-name, composer, conductor, remixer and
+related credit fields expand into native multi-values, as do genres. Values are
+trimmed and empty credits are dropped. Semicolons in titles and lyrics remain
+literal text. Native tag writing preserves multiline lyrics and comments;
+embedded NUL characters in unsplit values still require review.
+
+Comma followed by a space also separates performer/credit names, using the same
+expansion as semicolons. Explicit artist-map entries take precedence, including
+single-name entries for bands with literal commas (for example, Earth, Wind &
+Fire). Sort fields retain surname commas; use semicolons between sort names.
+Titles, lyrics and other free text keep literal commas. The existing primary
+album artist and folder rules still apply; all performers remain separate track
+artist and performer values.
+
+When embedded track artists exist, they seed track-artist and performer credits
+instead of prepending the album's primary artist. Each track's comma/semicolon
+expansion is independent; a collection-level artist roster is not copied onto
+every track. Existing explicit guest/remix/title credits are still merged.
+
+### Discogs release enrichment
+
+Set `DISCOGS_TOKEN`, `VCW_DISCOGS_TOKEN`, or `DISCOGS_API_TOKEN` in the process
+environment. Compose forwards these optional variables from its private `.env`.
+No credential is written to URLs, caches, manifests or history. No cookies are
+sent to Discogs. `--offline` disables requests even with credentials configured.
+
+Lookup requires agreement on artist, release title and ISO-normalized country;
+missing source country permits only explicit Worldwide releases. Discogs Worldwide
+matches any source country without changing the source ISO value; regional
+entries still require an exact normalized country/region match. Titles compare normalized whitespace and ASCII case; artist comparisons normalize
+Unicode case and trailing Discogs asterisks while preserving other punctuation. Existing artist mappings can supply the primary query name. No
+track-count/format restriction is imposed on this metadata-only match. The first candidate passing identity checks supplies its catalog, genres and
+styles. No cross-edition consensus or genre intersection is required. Existing source catalogs take precedence.
+
+The shared VCW provider/client supplies parsing, a one-day response cache,
+rate limiting at 60 requests/minute across release workers, bounded retries,
+timeouts and cancellation. Cache files are under `<output>/resources/discogs-cache`.
+Requests are confined to HTTPS api.discogs.com and do not follow redirects.
+Lookup failures keep only map-recognized source genres and print a diagnostic.
+Artist-default resource guesses are reserved for explicit `--offline` processing.
+
+Confirmed evidence is recorded in `releases.discogs_metadata` and the publication
+manifest; tags include one selected DISCOGSID and BCFUNL_GENRE_SOURCE.
+Enrichment occurs before filenames/templates, so a newly found catalog is usable
+in `{catalog_num}`. `--timings` reports `discogs_lookup` separately. Completed
+publications still skip normally and existing server copies are never overwritten.
+The local `data/genremap.dat` overrides include descriptive EBM spellings mapping
+to `EBM;Electronic`; canonical EBM/IDM acronyms remain uppercase.
+
+Discogs lookup tries the Bandcamp primary artist first, then confirmed aliases
+from reciprocal artist-map entries, then a title-only retrieval fallback. Every
+candidate and fetched release still must match a recognized artist alias, title,
+and country. Credit-map members that do not map back to the primary artist are
+not automatically treated as identity aliases. Bandcamp primary naming and
+server credit expansion are preserved. Diagnostics report search result counts
+and artist/title/country rejections separately. Cached empty primary searches do
+not prevent fresh alias queries.
+
+Discogs `Worldwide` is an explicit country wildcard, not an ISO country to write
+into tags or filenames. It can also match when the source country is unknown,
+leaving that source country empty. Provenance records the original provider
+countries and `exact-or-worldwide` policy; other unknown countries do not match.
+
+Discogs artist comparisons ignore trailing asterisks used for alternate-name
+credits and normalize case with Unicode lowercase. This applies to search hits,
+fetched release artists and alias checks. Stored artist names, internal asterisks,
+and title punctuation are preserved.
+
+### First eligible Discogs release
+
+Lookup now stops at the first candidate in provider result order whose artist
+(or confirmed alias), title and country qualify. Use that one record's catalog,
+genres and styles consistently and capture only its Discogs ID. Existing valid
+source catalogs still take precedence. If no candidate qualifies, print the
+reason and proceed with recognized source genres; no broader inference is made.
+No tag-agent invocation is needed for these deterministic rules.
+
+Composite countries such as `UK & US` and `UK&US` match either GB or US, through
+ISO normalization of the listed components. Worldwide remains a wildcard;
+regional entries do not match unlisted countries. Catalogs `DG011` and `DG 011`
+are both accepted. The selected record's spelling is preserved, and differences
+in later candidates cannot suppress its metadata. Earlier all-edition consensus
+and shared-style-intersection behavior has been removed.
+
+### Generic catalog decoration in track titles
+
+A trailing `[album title-catalog]` or `(album title: catalog)` group can supply a
+missing release catalog and be removed from the track title. The album portion
+must match the cleaned album name; the code must pass the shared letter/number
+catalog checks. This applies across labels, including codes with spaces or
+hyphens. Repeated codes differing only in spaces/hyphens agree; preserve the
+first source spelling, uppercased. Existing embedded or confirmed catalogs win.
+Genuinely conflicting inferred codes remain for review with sources retained.
+
+For example, `Sex [Chiodi EP-Ombrantl033]` under album `Chiodi EP` yields title
+`Sex` and catalog `OMBRANTL033`, available to `{catalog_num}` and CATALOGNUMBER.
+The source code is extracted literally, without guessing a label's spelling or
+adding per-label rules. Ordinary remix/version suffixes and groups naming a
+different album are preserved.
+
+Discogs lookup removes trailing year-qualified remaster/reissue notes from
+search and title comparison only. Supported forms include `(2026 Remaster)`,
+`[Remastered 2026]`, `- 2026 Reissue`, and `2026 RM/RE`, including reversed
+year order and re-issued/re-mastered spellings. Album tags and folder names
+retain the edition note. Remix, live, bonus-track, and unqualified year text
+remain significant. This matches a base title, not a specific pressing; the
+existing first eligible artist/title/country selection still applies.
