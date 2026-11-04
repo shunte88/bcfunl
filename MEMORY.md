@@ -2461,3 +2461,20 @@ the checked local staging roots; synthetic ZIP/ZIP64 and native pipeline fixture
 provide local coverage. Existing no-overwrite/publication guards remain intact.
 Do not claim a measured NAS speedup. /tmp/bcfunl-native-archive-smoke.py available
 for rerun. User can now run their staged batch on the rebuilt executable.
+
+## Session closed, 2026-11-03
+
+Stue acknowledged the v0.1.40 implementation and requested memory/status save
+and session close. Native archive/resource changes are complete locally: 138
+tests passed, 0 failed, 4 ignored; Clippy, fmt, optimized build and relevant
+maintenance/migration/Compose checks passed. Concurrent ZIP publication/cleanup
+and gzip resource import passed with the executable PATH=/nonexistent. SQLite
+remains unchanged and system-linked. Aria2 is the only production executable
+invoked; the optional maintenance shell wrapper still requires flock.
+
+Next session: read this handoff, then host/NAS acceptance and throughput review
+if requested. No measured NAS speedup or container deployment claimed. Changes
+remain uncommitted in this session; no commit, push or deployment performed.
+Previous accepted changes were committed by the host as f8f9936. The .git
+directory remains read-only to this session. Do not reopen metadata refinement
+or change the acquire count cap without a new request.
