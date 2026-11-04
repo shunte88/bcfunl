@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-11-03 (America/New_York)
-Local release: **v0.1.40**, native concurrent archive and resource I/O
+Updated: 2026-11-04 (America/New_York)
+Local release: **v0.1.41**, legacy title matching fix; container gate pending
 
 ## Current outcome
 
@@ -2041,3 +2041,65 @@ and packaging readiness gate, based on host output. Sudo workaround no longer
 needed for this host user. Hosted GitHub Actions rerun, GHCR publication, NAS
 deployment and NAS processing acceptance remain unverified. No agent push or
 deployment performed.
+
+## Session close: hosted Docker build clean
+
+After the full local workflow passed, Stue reported the GitHub Docker build
+was clean. Hosted build success is user-confirmed; agent did not independently
+inspect the Actions run. GHCR publication/pull was not separately confirmed.
+Next session: NAS deployment followed by in-place processing/performance tests.
+No further implementation requested. Preserve the pinned VCW dependency and
+shared build.yml readiness gate. Memory/status saved at user request.
+
+## 2026-11-04: bcstag4 NAS logs and legacy-title matching fix, v0.1.41
+
+NAS prior staging bcstag3 collection.sqlite3 was corrupt. Recovery integrity
+passed and yielded8737 rows, but three usernames and other fields were visibly
+damaged. No old backup remained; Stue chose new bcstag4 with fixed image, small
+batches and no clean. Original corruption cause remains unknown; healthy ZFS
+pool status does not establish application data integrity. Agent performed no
+NAS database replacement/deletion or server file changes. New stack renamed
+bcfunl4; initial service/path permission problems resolved by user.
+
+Read /data2/bcfunl-acquire4-cron.log and process4-cron.log. Two old service-name
+errors precede successful10/10 acquisition. Process runs: 10 attempted,2published,
+5skipped,3failed,wall53.618s; next 10attempted,3published,10skipped (includes
+history skips),4failed,wall43.405s. No SQLite malformed errors in these logs;
+not an independent DB integrity certification. No cleanup ran. Discogs token
+missing in new container, so enrichment disabled. Stue has now added Discogs
+requirements to .env and is running another small acquisition, then processing.
+Ensure Compose forwards token; current image still v0.1.40 until new build.
+
+Three repeat failures traced read-only using mounted NAS plus fresh ZIPs: old
+server TITLE fields have lossy Unicode substitutions (Gholü -> Ghol?, Nicolás
+-> Nicol?S, Karassimeon decorative symbols -> ?), while disc/track counts and
+positions agree. Existing matcher required exact normalized TITLE before hashes,
+causing false rejection. Removed title precondition only: still require unique
+disc/track positions, matching count/duration and full decoded PCM hashes for
+every file. Added count/position/hash mismatch diagnostics. Never retags or
+replaces existing files. Version bumped Cargo.toml/lock to v0.1.41.
+
+139 tests passed,0failed,5ignored. New regression covers legacy title damage,
+no writes, wrong disc and duplicate counts; existing differing-audio/no-overwrite
+test passes. New ignored read-only acceptance fixture consumes BCFUNL_TEST_ARCHIVE
+and BCFUNL_TEST_DESTINATION and extracts into private /tmp only. All THREE actual
+NAS release comparisons passed with release-profile test binary (Karassimeon
+1.38s, Fluke6.90s, FaceStabber22.08s on myth2017 mounted reads, NOT NAS benchmarks).
+Debug acceptance run was cancelled for slowness, then optimized tests completed.
+Read-only comparison details /tmp/bcfunl-existing-compare.txt; optimized test log
+/tmp/bcfunl-existing-acceptance-release.log. Original ZIPs, DB and server files
+unchanged.
+
+Separate REAL damaged existing audio: /mnt/tankn4/F8NAS1/music/Zheng/Zheng [DE]/
+01-04 - Love By Nature - [Ombra Intl036].flac. Native validation decodes8192 fewer
+frames than header. Independently confirmed flac -t errors (lost sync/bad header)
+and FFmpeg decode failure on corresponding /mnt/FN042018 mount. Fresh same-track
+FLAC extracted from bcstag4 album3878676280 ZIP passes flac -t. No automatic
+replacement/quarantine performed. Keep protection and source; needs user
+review/quarantine/reprocess separately. Do not weaken decoder validation.
+
+Fmt, locked strict Clippy and locked optimized build passed; binary v0.1.41
+built2026-11-04T05:13:41Z. Build workflow regression checks passed. Actual shared
+readiness script attempted and blocked at Docker preflight: session cannot access
+Docker daemon or sudo. Container gate NOT green for .41; host must run
+sh scripts/check-build.sh before push/deployment. No agent commit/push/deploy.

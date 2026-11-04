@@ -2189,3 +2189,38 @@ fn track_catalog_inference_accepts_spacing_variants_but_rejects_conflicting_code
         }
     }
 }
+
+#[test]
+fn existing_audio_matches_despite_legacy_title_damage_but_requires_unique_positions() {
+    let (_input, path) = fixture("flac");
+    let mut original = sample();
+    put(&mut original, "TITLE", "Gholü (Nicolás Remix)");
+    tagging::write(&path, &original).unwrap();
+    let server = tempfile::tempdir().unwrap();
+    let destination = server.path().join("01 - Ghol_.flac");
+    fs::copy(&path, &destination).unwrap();
+    let mut legacy = original.clone();
+    put(&mut legacy, "TITLE", "Ghol? (Nicol?S Remix)");
+    tagging::write(&destination, &legacy).unwrap();
+    let before = fs::read(&destination).unwrap();
+    let source = tracks(&[path]).unwrap();
+    assert!(matching_release(&source, server.path()).unwrap());
+    assert_eq!(fs::read(&destination).unwrap(), before);
+    put(&mut legacy, "DISCNUMBER", "2");
+    tagging::write(&destination, &legacy).unwrap();
+    assert!(!matching_release(&source, server.path()).unwrap());
+    put(&mut legacy, "DISCNUMBER", "1");
+    tagging::write(&destination, &legacy).unwrap();
+    fs::copy(&destination, server.path().join("duplicate.flac")).unwrap();
+    assert!(!matching_release(&source, server.path()).unwrap());
+}
+
+#[test]
+#[ignore = "read-only acceptance against an existing archive and server release"]
+fn existing_release_read_only_acceptance() {
+    let archive = std::env::var_os("BCFUNL_TEST_ARCHIVE").expect("BCFUNL_TEST_ARCHIVE");
+    let destination = std::env::var_os("BCFUNL_TEST_DESTINATION").expect("BCFUNL_TEST_DESTINATION");
+    let work = tempfile::tempdir().unwrap();
+    let source = tracks(&extract(Path::new(&archive), work.path()).unwrap()).unwrap();
+    assert!(matching_release(&source, Path::new(&destination)).unwrap());
+}

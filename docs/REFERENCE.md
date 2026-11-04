@@ -243,7 +243,10 @@ variants, missing titles/track numbers, and conflicting metadata require review;
 they remain unprocessed with their sources intact.
 
 Existing exact destinations and prior mcfunl-style artist/album folders are
-checked by disc/track number, title, count, duration and decoded PCM hashes.
+checked by unique disc/track number, count, duration and decoded PCM hashes.
+Title differences from older tagging do not reject identical audio. A skip still
+requires every matched track to decode completely and have identical audio
+hashes; this never retags or replaces existing server files.
 Verified matches skip even when filenames or country/catalog suffixes differ.
 Different audio at an existing destination is reported for review. Neither
 normal processing nor `--force` overwrites an existing server release.

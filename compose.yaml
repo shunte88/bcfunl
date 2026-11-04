@@ -6,14 +6,14 @@ services:
     working_dir: /app
     environment:
       HOME: /state
-      DISCOGS_TOKEN: ${DISCOGS_TOKEN:-}
-      VCW_DISCOGS_TOKEN: ${VCW_DISCOGS_TOKEN:-}
-      DISCOGS_API_TOKEN: ${DISCOGS_API_TOKEN:-}
-      BCFUNL_WINDOW: ${BCFUNL_WINDOW:-7}
+      BCFUNL_WINDOW: ${BCFUNL_WINDOW:-6}
       BCFUNL_COLLECTION: ${BCFUNL_COLLECTION:?Set BCFUNL_COLLECTION}
       BCFUNL_STAGING: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
       BCFUNL_MUSIC: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
       BCFUNL_TEMPLATE: ${BCFUNL_TEMPLATE:?Set BCFUNL_TEMPLATE}
+      VCW_DISCOGS_TOKEN: ${VCW_DISCOGS_TOKEN?Set VCW_DISCOGS_TOKEN}
+      VCW_ACOUSTID_KEY: ${VCW_ACOUSTID_KEY?Set VCW_ACOUSTID_KEY}
+      VCW_CONTACT: ${VCW_CONTACT?Set VCW_CONTACT}
     volumes:
       - type: bind
         source: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
@@ -59,20 +59,13 @@ services:
 
             echo "BCFunl :: Acquiring from $${BCFUNL_FROMDT} through $${BCFUNL_TODT}"
 
-              #--count 1000 \
               #--fromdt "$${BCFUNL_FROMDT}" \
               #--todt "$${BCFUNL_TODT}" \
-
-            # run with a fixed count - it will pick up new and unknown releases
-            # or once you have a repository cloned to your server use a small
-            # data window, here I'm using 7 days trailing to pickup new purchases
-            # pre-orderes that have hit their release date
-            #
+              # here we just using a test count
             exec /app/bcfunl \
               --user "$${BCFUNL_COLLECTION}" \
               --output "$${BCFUNL_STAGING}" \
-              --fromdt "$${BCFUNL_FROMDT}" \
-              --todt "$${BCFUNL_TODT}" \
+              --count 10 \
               --parallel 8 \
               --summary \
               "$$@"
@@ -81,21 +74,19 @@ services:
           process)
             echo "BCFunl :: Processing staged releases"
 
-            # run and process all candidate releases
-            # process finalizes the release by adding
-            # detailed metadata and creating standard
-            # bamed folders and files for your collection
-            #
+            # here we're just using a test count
+            # and no clean so we have the files
+            # available for review should we need
             exec /app/bcfunl \
               --process \
               --user "$${BCFUNL_COLLECTION}" \
               --output "$${BCFUNL_STAGING}" \
               --serverdir "$${BCFUNL_MUSIC}" \
+              --count 10 \
               --parallel 8 \
               --template "$${BCFUNL_TEMPLATE}" \
               --summary \
               --timings \
-              --clean \
               "$$@"
             ;;
 

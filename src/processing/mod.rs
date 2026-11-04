@@ -578,6 +578,12 @@ fn matching_release(source: &[Track], destination: &Path) -> Result<bool> {
     let paths = collect(destination)?;
     let found = tracks(&paths)?;
     if found.len() != source.len() {
+        eprintln!(
+            "  Existing release {}: expected {} tracks, found {}",
+            destination.display(),
+            source.len(),
+            found.len()
+        );
         return Ok(false);
     }
     let mut used = HashSet::new();
@@ -590,11 +596,17 @@ fn matching_release(source: &[Track], destination: &Path) -> Result<bool> {
             .filter(|(_, other)| {
                 disc_number(other).ok() == Some(signature.0)
                     && track_number(other).ok() == Some(signature.1)
-                    && key(&value(&other.tags, "TITLE")) == key(&value(&track.tags, "TITLE"))
                     && (other.duration - track.duration).abs() <= 3.0
             })
             .collect();
         if candidates.len() != 1 {
+            eprintln!(
+                "  Existing release {}: disc {} track {} has {} position/duration matches",
+                destination.display(),
+                signature.0,
+                signature.1,
+                candidates.len()
+            );
             return Ok(false);
         }
         let (index, other) = candidates[0];
@@ -606,10 +618,18 @@ fn matching_release(source: &[Track], destination: &Path) -> Result<bool> {
     let matches = file_pool()?.install(|| {
         pairs
             .par_iter()
-            .map(|(source, destination)| {
+            .map(|(source_path, destination_path)| {
                 let (source, destination) =
-                    rayon::join(|| pcm_hash(source), || pcm_hash(destination));
-                Ok(source? == destination?)
+                    rayon::join(|| pcm_hash(source_path), || pcm_hash(destination_path));
+                let equal = source? == destination?;
+                if !equal {
+                    eprintln!(
+                        "  Existing release audio mismatch: {} versus {}",
+                        source_path.display(),
+                        destination_path.display()
+                    );
+                }
+                Ok(equal)
             })
             .collect::<Result<Vec<_>>>()
     })?;
