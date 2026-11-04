@@ -1191,14 +1191,7 @@ fn processing_rows(db: &Database, args: &Args) -> Result<Vec<crate::db::Row>> {
         sql.push_str(" AND UPPER(artist) LIKE '%' || ? || '%'");
         values.push(crate::sanitizing::artist_display(artist).to_uppercase());
     }
-    if let Some(from) = args.fromdt {
-        sql.push_str(" AND purchase_date>=?");
-        values.push(from.to_string());
-    }
-    if let Some(to) = args.todt {
-        sql.push_str(" AND purchase_date<=?");
-        values.push(to.to_string());
-    }
+    crate::availability::window(&mut sql, &mut values, args);
     sql.push_str(" ORDER BY purchase_date DESC,item_key");
     db.query(&sql, &values.iter().map(String::as_str).collect::<Vec<_>>())
 }

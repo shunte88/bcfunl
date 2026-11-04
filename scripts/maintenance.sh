@@ -11,6 +11,7 @@ exec 9>.bcfunl-maintenance.lock
 flock -n 9 || { echo 'Another maintenance/resource job is running' >&2; exit 1; }
 trap 'exit 130' INT
 trap 'exit 143' TERM
+./bcfunl --database --user "$1" --output "$2" >> logs/database.log 2>&1 || exit $?
 acquisition_status=0
 ./bcfunl --user "$1" --output "$2" --cookies "$PWD/bandcamp.cookies.txt" \
     --parallel 2 --summary >> logs/download.log 2>&1 || acquisition_status=$?

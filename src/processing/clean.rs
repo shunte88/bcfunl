@@ -45,6 +45,12 @@ fn remove(db: &Database, args: &Args, input: &Path, row: &crate::db::Row) -> Res
     }
     let source = source.canonicalize()?;
     ensure!(
+        !source.ancestors().any(|p| p
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".parked-no-burn-"))),
+        "Parked no-burn directory; retain for review"
+    );
+    ensure!(
         db.query(
             "SELECT 1 FROM parked_payloads WHERE path=? AND no_burn=1",
             &[&source.to_string_lossy()]
@@ -143,6 +149,33 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn parked_directory_survives_even_when_restored_history_lacks_its_ledger() {
+        let root = super::super::tempfile::tempdir().unwrap();
+        let source = root
+            .path()
+            .join("johnsmith/.parked-no-burn-evidence/archive.zip");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"evidence").unwrap();
+        let args = Args::try_parse_from([
+            "bcfunl",
+            "--clean",
+            "--user",
+            "johnsmith",
+            "--output",
+            root.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let db = Database::open(":memory:").unwrap();
+        db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,file_path,download_date,process_date,processed_path) VALUES('johnsmith','album1','Artist','Title','https://bandcamp.com/download',?,'done','done','/unused')", &[source.to_str().unwrap()]).unwrap();
+        let row = processing_rows(&db, &args).unwrap().remove(0);
+        assert!(
+            format!("{:#}", remove(&db, &args, root.path(), &row).unwrap_err())
+                .contains("no-burn directory")
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"evidence");
+    }
 
     #[test]
     fn cleanup_requires_success_manifest_scope_and_exclusive_payload() {

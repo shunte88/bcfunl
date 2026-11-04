@@ -84,8 +84,9 @@ are loaded from `~/bcfunl/data/` because each command changes directory first.
 ### Daily acquisition, processing, and cleanup
 
 Copy the repository's `scripts/maintenance.sh` into `~/bcfunl/scripts/` alongside
-the installed application. It runs acquisition first, then processing with
-cleanup. Processing still runs after acquisition failures so completed downloads
+the installed application. It first checks and backs up collection history,
+then runs acquisition and processing with cleanup. An unrecoverable database
+check stops the workflow. Processing still runs after acquisition failures so completed downloads
 can be published. Both exit statuses are printed; either failure makes the
 workflow fail. The script uses `flock` (from `util-linux`) to prevent a second
 workflow starting before the first finishes.
@@ -131,3 +132,19 @@ on persistent storage with enough room for parallel download handoffs.
 No runtime compatibility, dataset permissions, TrueNAS tasks or real cleanup have
 been verified on the NAS by this session. The installation directory's exact
 absolute home path and execution environment are still to be confirmed there.
+
+
+### Standalone daily database task
+
+For a Dockge stack using the supplied Compose entrypoint, the daily first task is:
+
+```sh
+cd /mnt/.ix-apps/app_mounts/dockge/stacks/bcfunl && /usr/bin/docker compose run --rm -T bcfunl database >> /mnt/backup/bcfunl-database-cron.log 2>&1
+```
+
+Use a task account with Docker socket access. Run it before acquisition and
+processing. The maintenance wrapper already includes this check, so do not add a
+second backup task if you use that wrapper. To make failure block the remaining
+jobs reliably, chain `database`, `acquire`, and `process` with `&&` in one daily
+task rather than relying on separately timed jobs. Staging must already contain
+collection history from the initial acquisition.

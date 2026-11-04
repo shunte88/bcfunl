@@ -94,6 +94,23 @@ This acquires the current month's Discogs artist/master extracts and builds
 when present. Known genres take precedence; fallback requires a unique exact
 artist-name match and retains provenance. Use `--library` for another database.
 
+### Check and back up collection history
+
+```sh
+./bcfunl --database --user johnsmith --output ./downloads
+```
+
+Run this first in the daily schedule. It checks history, saves a verified
+SQLite snapshot under `downloads/backups`, and retains seven verified backups.
+If checks fail, it restores the latest healthy backup, applies current schema
+updates, and preserves damaged files for review. If none is healthy, it stops.
+Initialize staging with an acquisition before enabling this daily job.
+
+Preorders and future-dated purchases are tested against their authenticated
+download page. Available audio can be acquired before publication; otherwise,
+the entry is deferred without a failed-run error. Recorded deferred purchases
+are reconsidered within the requested artist, count, and date filters.
+
 ### Reclaim staging space
 
 ```sh

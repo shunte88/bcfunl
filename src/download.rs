@@ -103,6 +103,23 @@ fn choose(downloads: &Value, preferred: Format) -> Result<(String, String)> {
         .map(|(_, name, url)| (name, url))
         .context("No supported audio download available")
 }
+fn available_download(
+    downloads: &Value,
+    preferred: Format,
+    restricted: bool,
+) -> Result<(String, String)> {
+    let (format, url) = match choose(downloads, preferred) {
+        Ok(selection) => selection,
+        Err(_) if restricted => return Err(crate::availability::Deferred.into()),
+        Err(error) => return Err(error),
+    };
+    ensure!(
+        crate::net::allowed(&reqwest::Url::parse(&url)?, true),
+        "Unexpected selected audio URL origin"
+    );
+    Ok((format, url))
+}
+
 fn safe_name(value: &str) -> String {
     let mut cleaned = String::new();
     for c in value.chars().map(|c| {
@@ -367,7 +384,15 @@ pub fn prepare(
     let mut dates = crate::collection::release_dates(item);
     dates.extend(crate::collection::release_dates(&data));
     dates.extend(release.publish);
-    let mut preorder = flagged(&data) || flagged(item);
+    let captured = db.query(
+        "SELECT is_preorder FROM releases WHERE user=? AND item_key=?",
+        &[&args.user, &release.key],
+    )?;
+    let mut preorder = flagged(&data)
+        || flagged(item)
+        || captured
+            .first()
+            .is_some_and(|r| r[0].as_deref() == Some("1"));
     let single_evidence = [
         crate::collection::single_track(item),
         crate::collection::single_track(&data),
@@ -394,14 +419,36 @@ pub fn prepare(
         dates.extend(page_dates);
         crate::metadata::store(db, &args.user, &release.key, &html)?;
     }
-    ensure!(
-        publish.is_none_or(|d| d <= Utc::now().date_naive()),
-        "Release publication date is in the future"
-    );
+    let restricted = preorder || dates.iter().any(|d| *d > Utc::now().date_naive());
+    crate::availability::record(
+        db,
+        args,
+        &release.key,
+        preorder,
+        &dates,
+        Some(if restricted { "pending" } else { "captured" }),
+    )?;
+    let (format, url) = available_download(&item["downloads"], args.format, restricted)?;
+    crate::availability::record(
+        db,
+        args,
+        &release.key,
+        preorder,
+        &dates,
+        Some(if restricted {
+            "early-access"
+        } else {
+            "available"
+        }),
+    )?;
+    if restricted {
+        eprintln!(
+            "  Authenticated audio available despite preorder/future date: {}",
+            release.title
+        );
+    }
     let stale =
         preorder && crate::collection::stale_prerelease(single, &dates, Utc::now().date_naive());
-    ensure!(!preorder || stale, "Release is a preorder/prerelease");
-    let (format, url) = choose(&item["downloads"], args.format)?;
     if stale {
         let cleaned = crate::sanitizing::remove_prerelease(&release.title);
         ensure!(
@@ -525,26 +572,12 @@ fn refreshed_link(
                 })
         })
         .context("Returned download page belongs to a different release")?;
-    let evidence = [
-        crate::collection::single_track(item),
-        crate::collection::single_track(&data),
-    ];
-    let single = !evidence.contains(&Some(false))
-        && (evidence.contains(&Some(true)) || previous.is_some_and(|(single, _)| single));
     let mut dates = crate::collection::release_dates(item);
     dates.extend(crate::collection::release_dates(&data));
     dates.extend(previous.map(|(_, date)| date));
-    let today = Utc::now().date_naive();
-    ensure!(
-        dates.iter().all(|date| *date <= today),
-        "Returned release publication date is in the future"
-    );
-    ensure!(
-        !(flagged(&data) || flagged(item))
-            || crate::collection::stale_prerelease(single, &dates, today),
-        "Returned page is a preorder/prerelease"
-    );
-    let (format, url) = choose(&item["downloads"], preferred)?;
+    let restricted =
+        flagged(&data) || flagged(item) || dates.iter().any(|date| *date > Utc::now().date_naive());
+    let (format, url) = available_download(&item["downloads"], preferred, restricted)?;
     ensure!(
         crate::net::allowed(&reqwest::Url::parse(&url)?, true),
         "Unexpected refreshed audio URL origin"
@@ -657,6 +690,25 @@ pub fn fetch(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn unavailable_preorders_defer_but_invalid_origins_still_fail() {
+        assert!(
+            available_download(&json!({}), Format::Flac, true)
+                .unwrap_err()
+                .is::<crate::availability::Deferred>()
+        );
+        assert!(
+            !available_download(&json!({}), Format::Flac, false)
+                .unwrap_err()
+                .is::<crate::availability::Deferred>()
+        );
+        let bad = json!({"flac":{"url":"https://example.com/untrusted"}});
+        assert!(
+            !available_download(&bad, Format::Flac, true)
+                .unwrap_err()
+                .is::<crate::availability::Deferred>()
+        );
+    }
     #[test]
     fn format_preferences_fallbacks_and_resolution() {
         let values = json!({"flac":{"url":"f"},"wav":{"url":"w"},"mp3-320":{"url":"m"},"mp3-v0":{"url":"v"}});
@@ -804,15 +856,16 @@ mod tests {
         )
     }
     #[test]
-    fn recovery_accepts_only_old_confirmed_single_track_preorders() {
+    fn recovery_accepts_authenticated_downloads_for_preorders_and_future_releases() {
         let today = Utc::now().date_naive();
         let past = today.pred_opt().unwrap();
         for (single, date, expected) in [
             (true, past, true),
-            (true, today, false),
-            (false, past, false),
-            (false, today - chrono::Duration::days(30), false),
+            (true, today, true),
+            (false, past, true),
+            (false, today - chrono::Duration::days(30), true),
             (false, today - chrono::Duration::days(31), true),
+            (false, today.succ_opt().unwrap(), true),
         ] {
             let data = json!({"is_preorder":true,"download_items":[{"title":"Title","artist":"Artist","downloads":{"flac":{"url":"https://popplers5.bandcamp.com/download/track?fixture"}}}]});
             let html = format!("<div id='pagedata' data-blob='{data}'></div>");
@@ -824,9 +877,7 @@ mod tests {
         }
         let data = json!({"is_preorder":true,"release_date":today.to_string(),"download_items":[{"type":"track","title":"Title","artist":"Artist","downloads":{"flac":{"url":"https://popplers5.bandcamp.com/download/track?fixture"}}}]});
         let html = format!("<div id='pagedata' data-blob='{data}'></div>");
-        assert!(
-            refreshed_link(&html, "Title", "Artist", Format::Flac, Some((true, past))).is_err()
-        );
+        assert!(refreshed_link(&html, "Title", "Artist", Format::Flac, Some((true, past))).is_ok());
         let html = "<script data-tralbum='{&quot;album_release_date&quot;:&quot;2023-01-01&quot;,&quot;is_preorder&quot;:true,&quot;trackinfo&quot;:[{}]}'></script>";
         let (dates, preorder, single) = release_metadata(html).unwrap();
         assert!(preorder);

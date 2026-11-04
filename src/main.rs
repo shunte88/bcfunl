@@ -1,6 +1,8 @@
 mod archive;
 mod aria2;
+mod availability;
 mod collection;
+mod database;
 mod db;
 mod download;
 mod genres;
@@ -97,6 +99,9 @@ struct Args {
     /// Remove staged payloads only after successful verified publication
     #[arg(long)]
     clean: bool,
+    /// Check collection history, retain seven verified backups, or restore the latest healthy backup
+    #[arg(long, conflicts_with_all = ["process", "clean", "resources", "artist", "fromdt", "todt", "count", "parallel", "force", "summary"])]
+    database: bool,
     /// Acquire/import current Discogs artists and masters snapshots into resources/library.sqlite3
     #[arg(long, conflicts_with_all = ["process", "clean", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template", "varioustag"])]
     resources: bool,
@@ -293,16 +298,7 @@ fn capture_page(
                 "released",
             ],
         );
-        if flagged(item)
-            && !collection::stale_prerelease(
-                collection::single_track(item) == Some(true),
-                &collection::release_dates(item),
-                Utc::now().date_naive(),
-            )
-        {
-            continue;
-        }
-        if !args.matches(purchase) || publish.is_some_and(|d| d > Utc::now().date_naive()) {
+        if !args.matches(purchase) {
             continue;
         }
         let release = Release {
@@ -329,6 +325,22 @@ fn capture_page(
             release_url=COALESCE(excluded.release_url,releases.release_url)",
             &[&args.user,&release.key,&release.artist,&release.title,&publish.map(|d| d.to_string()).unwrap_or_default(),&purchase.map(|d| d.to_string()).unwrap_or_default(),url,release.release_url.as_deref().unwrap_or_default()])?;
         db.query("UPDATE releases SET sanitized_title=?,catalog_num=COALESCE(NULLIF(CASE WHEN lower(trim(catalog_num))='none' THEN '' ELSE catalog_num END,''),NULLIF(?,'')) WHERE user=? AND item_key=?", &[&sanitized,catalog.as_deref().unwrap_or_default(),&args.user,&release.key])?;
+        availability::record(
+            db,
+            args,
+            &release.key,
+            flagged(item),
+            &collection::release_dates(item),
+            None,
+        )?;
+        db.query(
+            "UPDATE releases SET release_private=? WHERE user=? AND item_key=?",
+            &[
+                if release.private { "1" } else { "0" },
+                &args.user,
+                &release.key,
+            ],
+        )?;
         let release = Release {
             title: sanitized,
             ..release
@@ -361,13 +373,14 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         let items = page["tralbums"]
             .as_array()
             .context("Missing collection search tralbums")?;
-        let mut selected = Vec::new();
+        let mut selected = availability::pending(db, args)?;
+        let mut seen = selected.iter().map(|r| r.key.clone()).collect();
         capture_page(
             db,
             args,
             items,
             &page["redownload_urls"],
-            &mut HashSet::new(),
+            &mut seen,
             &mut selected,
         )?;
         eprintln!(
@@ -383,8 +396,8 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         .context("Missing collection cache")?;
     let mut initial: Vec<_> = cache.values().cloned().collect();
     initial.sort_by(|a, b| b["token"].as_str().cmp(&a["token"].as_str()));
-    let mut seen = HashSet::new();
-    let mut selected = Vec::new();
+    let mut selected = availability::pending(db, args)?;
+    let mut seen = selected.iter().map(|r| r.key.clone()).collect();
     capture_page(
         db,
         args,
@@ -484,6 +497,14 @@ fn record_result(
             Ok(0)
         }
         Err(_) if shutdown::requested() => Ok(0),
+        Err(error) if error.is::<availability::Deferred>() => {
+            db.query("UPDATE releases SET availability_status='pending',availability_checked_at=?,last_error=NULL WHERE user=? AND item_key=?", &[&Utc::now().to_rfc3339(),&args.user,&release.key])?;
+            eprintln!(
+                "  Deferred: {} - {}: awaiting downloadable audio",
+                release.artist, release.title
+            );
+            Ok(0)
+        }
         Err(error) => {
             // HTTP errors have signed URLs removed at the request boundary. Keep the useful cause.
             let message = format!("{error:#}");
@@ -559,6 +580,9 @@ fn process_parallel<P: Send>(
 fn run(args: Args) -> Result<()> {
     let started = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     args.validate()?;
+    if args.database {
+        return database::run(&args);
+    }
     if args.resources {
         return resources::run(&args);
     }

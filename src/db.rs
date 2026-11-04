@@ -15,6 +15,14 @@ unsafe extern "C" {
         vfs: *const c_char,
     ) -> c_int;
     fn sqlite3_close(db: *mut c_void) -> c_int;
+    fn sqlite3_backup_init(
+        destination: *mut c_void,
+        name: *const c_char,
+        source: *mut c_void,
+        source_name: *const c_char,
+    ) -> *mut c_void;
+    fn sqlite3_backup_step(backup: *mut c_void, pages: c_int) -> c_int;
+    fn sqlite3_backup_finish(backup: *mut c_void) -> c_int;
     fn sqlite3_errmsg(db: *mut c_void) -> *const c_char;
     fn sqlite3_busy_timeout(db: *mut c_void, ms: c_int) -> c_int;
     fn sqlite3_prepare_v2(
@@ -103,6 +111,11 @@ impl Database {
             ("processed_path", "TEXT"),
             ("crc_reacquired", "INTEGER NOT NULL DEFAULT 0"),
             ("parked", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_preorder", "INTEGER NOT NULL DEFAULT 0"),
+            ("scheduled_release_date", "TEXT"),
+            ("availability_status", "TEXT"),
+            ("availability_checked_at", "TEXT"),
+            ("release_private", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             if !columns.iter().any(|row| row[1].as_deref() == Some(name)) {
                 db.query(
@@ -122,6 +135,24 @@ impl Database {
         db.query("CREATE TABLE IF NOT EXISTS parked_payloads (path TEXT PRIMARY KEY,user TEXT NOT NULL,item_key TEXT NOT NULL,parked_date TEXT NOT NULL,reason TEXT NOT NULL,no_burn INTEGER NOT NULL DEFAULT 1 CHECK(no_burn=1))", &[])?;
         db.query("COMMIT", &[])?;
         Ok(db)
+    }
+    pub(crate) fn backup_to(&self, path: &str) -> Result<()> {
+        let target = Self::connect(path)?;
+        let backup =
+            unsafe { sqlite3_backup_init(target.0, c"main".as_ptr(), self.0, c"main".as_ptr()) };
+        ensure!(
+            !backup.is_null(),
+            "Initialize SQLite backup: {}",
+            target.error()
+        );
+        let status = unsafe { sqlite3_backup_step(backup, -1) };
+        let finished = unsafe { sqlite3_backup_finish(backup) };
+        ensure!(
+            status == 101 && finished == 0,
+            "SQLite backup failed (step {status}, finish {finished}): {}",
+            target.error()
+        );
+        Ok(())
     }
     pub fn increment_attempts(&self, user: &str, key: &str) -> Result<()> {
         self.query(
@@ -193,7 +224,7 @@ impl Database {
         Ok(!self.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND (parked=1 OR (download_date IS NOT NULL AND ?='0'))", &[user,key,if force { "1" } else { "0" }])?.is_empty())
     }
     pub fn dump(&self, out: &mut impl std::io::Write, scope: Option<(&str, &str)>) -> Result<()> {
-        let select = "SELECT artist,COALESCE(sanitized_title,release_title),download_date,attempts,CASE WHEN last_error IS NULL AND download_date IS NOT NULL THEN 'success' ELSE last_error END FROM releases";
+        let select = "SELECT artist,COALESCE(sanitized_title,release_title),download_date,attempts,CASE WHEN last_error IS NULL AND download_date IS NOT NULL THEN 'success' WHEN availability_status='pending' THEN 'deferred: awaiting audio' ELSE last_error END FROM releases";
         let (filter, values) = match scope {
             Some((user, started)) => (
                 " WHERE user=? AND last_attempt_date>=?",

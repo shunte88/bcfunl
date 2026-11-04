@@ -9,7 +9,7 @@ this session has no general reminder/scheduling tool.
 
 
 Updated: 2026-11-04 (America/New_York)
-Local release: **v0.1.49**, CRC re-acquisition and parked/no-burn evidence; container gate pending
+Local release: **v0.1.50**, daily database backup/recovery and early-access availability; container gate pending
 
 ## Current outcome
 
@@ -2388,3 +2388,87 @@ CRC durability across reopening SQLite, force exclusion, offline/network failure
 parking and cleanup no-burn rejection. Existing real ZIP corruption test confirms
 typed classification. No NAS payload/database changes, commit, push or deployment.
 User requested memory/status and a break due to low remaining weekly usage.
+
+
+## 2026-11-04: v0.1.50 daily database recovery and preorder availability
+
+Stue requested --database as the daily first-touch job: test history, retain seven
+verified timestamped backups, restore the newest healthy backup on failure, and
+apply current DDL. Stue accepts a possible extra download after restoring history.
+Implemented src/database.rs with the existing staging lock and native system
+SQLite backup API (new small bindings in db.rs), not an external sqlite3 process.
+
+Checks: full PRAGMA integrity_check, foreign_key_check, required releases columns
+and composite primary key, owner/key syntax, nonempty artist/title, dates and
+completion timestamps. No claim of detecting plausible but incorrect text.
+Backups use native SQLite snapshotting, include committed WAL data, are checked
+and synced, then published without overwrite under <output>/backups as
+collection.sqlite3.YYYYMMDDTHHMMSS.nnnnnnnnnZ. New snapshot files are private
+0600 and newly created backup/quarantine directories 0700 on Unix. Retain seven
+healthy snapshots; preserve suspect backups for review. Repeated invocations each
+create a snapshot, so schedule once daily. No resources/library.sqlite3 backup.
+
+If live history fails checks, search backups newest first, rejecting bad ones.
+Prepare a replacement in a private temporary directory, apply Database::open
+migrations, and recheck before installation. Preserve original main database and
+journal/WAL/SHM files via hard links under database-quarantine-*, sync, remove live
+sidecars, atomically replace main, sync and recheck. Reject symlinks. With no healthy
+backup, stop without installing empty history. Bootstrap initial acquisition once
+before enabling the database task for new staging. Quarantine is never auto-pruned.
+Restored history may forget a day's activity; server audio remains protected by
+normal existing-copy verification. No disk-wide redundancy: independent backup
+storage is still recommended. No NAS database or payload was modified in session.
+
+Compose supports the database argument. scripts/maintenance.sh runs it first and
+aborts on a failed/unrecoverable check, then retains existing acquisition/process
+error semantics. Docs show chaining database && acquire && process rather than
+relying on separate timing to order tasks. Did not alter the user's existing
+Compose test count/date settings. Updated lock error to include database jobs.
+
+Preorders/future dates no longer categorically prevent acquisition. Capture their
+metadata and inspect the authenticated owned download page for supported audio.
+An offered trusted audio URL permits a transfer even before publication, including
+refreshed links. Actual completion is still recorded only after successful payload
+transfer. Empty formats on a restricted release return typed Deferred, are logged
+without failing the run, and remain eligible. Other network/payload/origin errors
+still fail. Existing stale-marker title cleanup age rules remain intact.
+
+New automatic columns: is_preorder (ever observed; MAX uses CAST bound value to
+INTEGER), scheduled_release_date, availability_status, availability_checked_at,
+release_private. States captured/pending/available/early-access. Retain source date
+and preorder evidence. src/availability.rs loads recorded pending/early-access
+releases before collection scanning, oldest check first, respecting artist and
+shared count limit. Uses scheduled date fallback when original publish date absent.
+Private state persists. A deferred availability check consumes one count slot.
+For these entries, date filters match purchase date OR scheduled release date,
+with both bounds applied to the same date. Shared SQL helper used in offline
+processing/clean too; ordinary entries keep purchase-date filtering. Covered
+from-only, to-only, both/neither, cross-window dates, artist/count, completed and
+parked exclusions. Never-before-captured entries still need collection discovery;
+missing download-page URLs retain existing skip behavior. No migration guesses
+legacy preorder state solely from old error strings.
+
+Cleanup also refuses .parked-no-burn-* ancestry independently of the SQLite ledger,
+protecting evidence when recovery restores a snapshot predating its parking.
+
+Validation: 157 passed,0failed,5ignored; locked strict Clippy, fmt, locked release
+build, whitespace, shell syntax, workflow-regression checks all passed. Compose
+config validated with dummy values and --env-file /dev/null, no secret output.
+Actual check-build.sh attempted: Docker daemon unavailable in this agent session,
+so image/package readiness blocked for host verification. Binary v0.1.50 built
+2026-11-04T20:27:44Z. Live Eve Maret subscription acceptance and NAS restore not
+performed. Tests cover native committed-WAL snapshot, retention, corruption/older
+backup fallback, malformed timestamps, no-healthy/missing DB refusal, schema
+migration, lock/CLI conflicts, no-burn without restored ledger, future authenticated
+links, unsafe-origin rejection and nonfatal deferral. No new runtime dependencies,
+commit/push/deploy, queued-job interruption or NAS writes.
+
+
+## Backup deployment preference
+
+Stue accepts the current `<output>/backups` location on the NAS; a configurable
+backup destination is not required. Stue plans to configure a separate job or
+app to rsync the database backup copies to cloud storage after the daily
+`--database` job finishes. This provides an independent copy in addition to the
+seven local verified snapshots. Cloud sync is planned, not configured or verified
+by this application or this session. No cloud provider has been selected here.

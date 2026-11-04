@@ -113,7 +113,7 @@ fn named_arguments_dates_and_validation() {
     );
 }
 #[test]
-fn capture_skips_preorders_missing_links_duplicates_and_completed() {
+fn capture_retains_preorders_but_skips_missing_links_duplicates_and_completed() {
     let db = Database::open(":memory:").unwrap();
     let a = args();
     let (mut items, urls) = fixtures(6);
@@ -126,9 +126,9 @@ fn capture_skips_preorders_missing_links_duplicates_and_completed() {
     let mut seen = HashSet::new();
     let mut selected = Vec::new();
     capture_page(&db, &a, &items, &urls, &mut seen, &mut selected).unwrap();
-    assert_eq!(selected.len(), 3);
+    assert_eq!(selected.len(), 5);
     capture_page(&db, &a, &items, &urls, &mut seen, &mut selected).unwrap();
-    assert_eq!(selected.len(), 3);
+    assert_eq!(selected.len(), 5);
     db.query(
         "UPDATE releases SET download_date='2025-11-01' WHERE item_key=?",
         &["album4"],
@@ -137,13 +137,13 @@ fn capture_skips_preorders_missing_links_duplicates_and_completed() {
     seen.clear();
     selected.clear();
     capture_page(&db, &a, &items, &urls, &mut seen, &mut selected).unwrap();
-    assert_eq!(selected.len(), 2);
+    assert_eq!(selected.len(), 4);
     let mut a = a;
     a.force = true;
     seen.clear();
     selected.clear();
     capture_page(&db, &a, &items, &urls, &mut seen, &mut selected).unwrap();
-    assert_eq!(selected.len(), 3);
+    assert_eq!(selected.len(), 5);
     assert_eq!(
         db.query("SELECT artist FROM releases WHERE item_key=?", &["album4"])
             .unwrap()[0][0]
@@ -876,12 +876,13 @@ fn private_collection_purchases_remain_eligible_without_public_metadata() {
     items[0]["release_date"] = json!(Utc::now().date_naive().to_string());
     let mut selected = Vec::new();
     capture_page(&db, &a, &items, &urls, &mut HashSet::new(), &mut selected).unwrap();
-    assert_eq!(selected.len(), 1);
-    assert!(!selected[0].private);
+    assert_eq!(selected.len(), 2);
+    assert!(selected[0].private);
+    assert!(!selected[1].private);
 }
 
 #[test]
-fn capture_admits_old_flagged_albums_and_past_singles() {
+fn capture_records_flagged_and_future_releases_for_authenticated_availability() {
     let root = tempdir();
     let db = Database::open(root.join("collection.sqlite3").to_str().unwrap()).unwrap();
     let (mut items, urls) = fixtures(4);
@@ -904,9 +905,20 @@ fn capture_admits_old_flagged_albums_and_past_singles() {
         &mut selected,
     )
     .unwrap();
-    assert_eq!(selected.len(), 2);
+    assert_eq!(selected.len(), 4);
     assert_eq!(selected[0].key, "album0");
-    assert_eq!(selected[1].key, "album3");
+    assert_eq!(selected[3].key, "album3");
+    assert_eq!(
+        db.query(
+            "SELECT is_preorder,scheduled_release_date FROM releases WHERE item_key='album2'",
+            &[]
+        )
+        .unwrap()[0],
+        vec![
+            Some("1".into()),
+            Some(today.succ_opt().unwrap().to_string())
+        ]
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

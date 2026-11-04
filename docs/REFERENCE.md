@@ -59,7 +59,7 @@ Options:
 | `--cookies` | Cookie export; defaults to `bandcamp.cookies.txt`. |
 | `--fromdt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
 | `--todt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
-| `--count` | Maximum eligible releases to attempt this run; omitted means all. Completed entries, collection preorders, and missing links do not consume the limit. |
+| `--count` | Maximum eligible releases to attempt this run; omitted means all. Completed entries and missing links do not consume the limit. Preorder availability checks and deferred entries do consume it. |
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
 | `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
 | `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with up to 16 connections per server per release; `--process` uses local workers. Omit for sequential work. |
@@ -68,6 +68,7 @@ Options:
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
 | `--offline` | Disable Discogs network requests during processing. |
+| `--database` | Check collection history, retain seven verified backups, or restore the latest healthy backup. Standalone with `--output`. |
 | `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
 | `--serverdir` | Required library destination for processing. |
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
@@ -340,9 +341,11 @@ Unavailable dates remain SQL NULL. A preorder/prerelease flag is considered stal
 when every available release date is more than 30 UTC calendar days before today,
 for any track count. Exactly 30 days does not qualify. The existing exception for
 confirmed single-track releases dated strictly before today also remains.
-Missing dates or conflicting recent/future dates prevent the exception. Purchase
-dates do not establish release age. The same rules apply to refreshed download
-links. Processing removes explicit bracketed prerelease markers from derived
+Missing dates or conflicting recent/future dates prevent stale-marker cleanup.
+Purchase dates do not establish release age. These age rules govern title cleanup,
+not authenticated download availability: an owned preorder or future-dated
+release may be acquired when its download page offers supported audio. The same
+availability rule applies to refreshed links. Processing removes explicit bracketed prerelease markers from derived
 album and track titles for qualifying releases, preserving captured source titles.
 One downloadable item alone does not prove single-track cardinality.
 
@@ -1022,3 +1025,74 @@ sqlite3 downloads/collection.sqlite3 \
 There is no automatic reset or third acquisition. Review the evidence and the
 error before deliberately restoring a valid source and clearing the release's
 `parked` flag. Keep the evidence ledger and its `no_burn` protection intact.
+
+
+### Daily database checks and recovery
+
+Run `bcfunl --database --user johnsmith --output /mnt/backup/bcfstag4` before the
+daily acquisition and processing jobs. It uses the same staging lock, so no
+cooperating job can update history while it checks, backs up, or restores it.
+This is a standalone mode; acquisition/processing flags cannot be combined.
+It manages `collection.sqlite3`, not the separate Discogs resources database.
+
+Checks cover full SQLite integrity, foreign keys, required release columns and
+primary key, owner/key syntax, nonempty artist/title values, calendar dates and
+completion timestamps. They detect structural damage and some malformed values;
+they cannot establish that plausible text such as an artist name is correct.
+No healthy backup is inferred from a successful `.recover` operation alone.
+
+Snapshots use SQLite's native backup API, including committed WAL data. A new
+snapshot is checked and synced before publication as
+`backups/collection.sqlite3.YYYYMMDDTHHMMSS.nnnnnnnnnZ`. Seven latest verified
+backups are retained. Suspect backups are skipped for restoration and preserved
+for review rather than silently deleted. Repeated manual runs each create a
+backup; schedule this once daily to obtain approximately a week of history.
+
+If the live database fails checks, candidates are checked newest first. The
+selected backup is copied and migrated in a private temporary directory, then
+checked again. Original database and journal/WAL/SHM files are preserved under
+`database-quarantine-*` before a verified replacement is installed. Current DDL
+is applied automatically. If no healthy backup exists, the job fails without
+creating empty replacement history. First initialize a new staging directory
+with acquisition, then enable the daily database job.
+
+A restored snapshot can forget a day's downloads or publications. Re-acquisition
+may be necessary, especially after cleanup. Existing server releases still
+undergo audio verification and are never overwritten. Parked no-burn directories
+remain protected even if the restored ledger predates their creation. Keep
+backups on reliable storage; these local snapshots do not replace an independent
+copy protecting against loss of the entire staging disk. No automatic cleanup
+of quarantined databases is performed.
+
+### Preorder and early-access availability
+
+History records `is_preorder` (ever observed), `scheduled_release_date` (latest
+observed release date), `availability_status`, `availability_checked_at`, and
+`release_private`. Source dates and preorder evidence are retained even when
+an authenticated download is available before publication. Availability states
+are `captured`, `pending`, `available`, and `early-access`. An offered audio link
+is provisional evidence; completion is recorded only after a successful transfer.
+
+When no supported audio link exists for a preorder/future release, it is marked
+pending, logged as deferred, and does not make the run fail. Network failures,
+untrusted origins, corrupt payloads, and other real errors still fail normally.
+The release keeps a NULL download date and can be checked again. Private purchases
+retain their private status when reloaded, avoiding unavailable public-page reads.
+
+Recorded pending/early-access purchases are reconsidered before scanning new
+collection entries, oldest availability check first. They share the same count
+limit and artist filter. A date window matches purchase date OR, for these
+preorder entries, scheduled release date; both bounds are applied to the same
+date, and either bound can be omitted. Offline processing/cleanup uses that same
+window exception. Ordinary purchases retain purchase-date filtering. A deferred
+entry consumes one count slot for its availability check. Entries never captured
+before still require discovery through the collection search/window.
+
+For a targeted subscription test without a date window:
+
+```sh
+./bcfunl --user johnsmith --output ./downloads --artist "Eve Maret" --count 1 --summary
+```
+
+This checks actual authenticated availability without assuming that all
+subscriptions grant early access. Live acceptance requires the owner's cookies.

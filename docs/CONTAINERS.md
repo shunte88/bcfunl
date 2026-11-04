@@ -138,7 +138,7 @@ docker compose run --rm --entrypoint sh bcfunl \
   /mnt/backup /mnt/tankn4/music
 ```
 
-The wrapper runs acquisition then processing with cleanup. Logs and workflow
+The wrapper checks/backs up history first, then runs acquisition and processing with cleanup. It stops if history cannot be checked or recovered. Logs and workflow
 locks persist under `container-state`. `HOME=/state` keeps aria2's temporary
 Downloads on that same persistent storage. Cookie and mapping mounts are read-only.
 
@@ -201,3 +201,25 @@ and forward it through the service environment as in the supplied Compose file.
 Use `--process --offline` to disable network lookups. Recreate the one-shot job
 after changing its environment. Discogs matches must agree on artist/title/country;
 matching genres/styles replace Bandcamp genres rather than merging both.
+
+
+### Daily history check
+
+The Compose service accepts `database` as well as `acquire` and `process`:
+
+```sh
+docker compose run --rm -T bcfunl database
+```
+
+Run this once daily before the other jobs, using the same stack directory and
+Docker-capable task account. To enforce ordering and stop on a failed check:
+
+```sh
+docker compose run --rm -T bcfunl database &&
+  docker compose run --rm -T bcfunl acquire &&
+  docker compose run --rm -T bcfunl process
+```
+
+Keep scheduled runs separate from image updates. Backups and quarantined history
+persist inside the staging bind mount. Initialize acquisition once before enabling
+the database task on a brand-new empty staging directory.

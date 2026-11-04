@@ -52,6 +52,15 @@ services:
 
 
         case "$${mode}" in
+          database)
+            echo "BCFunl :: First touch database maintenance"
+
+            exec /app/bcfunl --database \
+              --user "$${BCFUNL_COLLECTION}" \
+              --output "$${BCFUNL_STAGING}" \
+              "$$@"
+            ;;
+
           acquire)
             BCFUNL_TODT="$$(date +%F)"
             BCFUNL_FROMDT="$$(date -d "$${BCFUNL_ENDDT} $${BCFUNL_WINDOW} days ago" +%F)"
@@ -65,7 +74,7 @@ services:
             exec /app/bcfunl \
               --user "$${BCFUNL_COLLECTION}" \
               --output "$${BCFUNL_STAGING}" \
-              --count 10 \
+              --count 100 \
               --parallel 8 \
               --summary \
               "$$@"
@@ -82,16 +91,17 @@ services:
               --user "$${BCFUNL_COLLECTION}" \
               --output "$${BCFUNL_STAGING}" \
               --serverdir "$${BCFUNL_MUSIC}" \
-              --count 10 \
+              --count 100 \
               --parallel 8 \
               --template "$${BCFUNL_TEMPLATE}" \
               --summary \
               --timings \
+              --clean \
               "$$@"
             ;;
 
           *)
-            echo "Usage: bcfunl acquire|process [extra arguments]" >&2
+            echo "Usage: bcfunl database|acquire|process [extra arguments]" >&2
             exit 2
             ;;
         esac
