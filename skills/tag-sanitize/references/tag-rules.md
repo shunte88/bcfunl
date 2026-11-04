@@ -55,7 +55,9 @@ Resolve source paths against the caller repository, not the installed skill dire
 10. Trailing parenthesized catalog hints: maximum 32 characters, uppercase initial, at least two uppercase letters and a digit; remaining characters only uppercase letters/digits/`-./`. Exclude years, CD/disc/disk/LP/DVD/SACD/volume/BPM/live/remix descriptors. Leave ambiguous/lowercase forms unchanged. Real catalog tags win; promote hints only from verified provider metadata and reject conflicting variants.
 11. Preserve remix volume, score/edition/mix, vocal/dub/instrumental and BPM distinctions, leading `The` and remix-series prefixes. Case/punctuation normalization is for comparison, not display. Count alone never proves identity.
 12. Use bounded clean/raw lookup candidates and consistent discovery/acceptance rules. Relaxed matches still need artist agreement, full ordered count/titles and available durations within three seconds. Missing duration is unknown; never search by duration. Keep caller provider-order/ambiguity policy.
-13. Label compilations require multiple structured performers, matching artist-prefixed titles and a nonperforming storefront. Use `Various Artists` plus individual track artists. Source album-artist labels match only with validated tracks, never by label alone.
+13. Label compilations require multiple structured performers, matching artist-prefixed titles and a nonperforming storefront. Use `Various Artists` by default plus individual track artists. Processing
+    `--varioustag '{label}'` or `'{albumtitle}'` may replace only release grouping
+    and release artist/sort tags; preserve COMPILATION=1 and track credits. Source album-artist labels match only with validated tracks, never by label alone.
 
 ### Other fields and missing metadata
 
@@ -274,3 +276,21 @@ when supplied. These credits come from the already cached confirmed release,
 with no extra HTTP request. Producer-only and track-scoped credits are excluded.
 The source album artist and naming convention remain unchanged. This does not
 retag previously published releases in place.
+
+Discogs artist identity comparison reuses VCW's numeric disambiguation cleanup:
+`Mono (7)` matches `MONO`, while meaningful qualifiers such as `(Live)` remain.
+`Various` and `Various Artists` are equivalent compilation credits. These rules
+apply to artist comparisons only; source display names and album titles remain
+unchanged.
+
+The artist map also canonicalizes bare `VA` (case-insensitive), alongside
+`V/A`, `V.A.`, `V_A` and `Various`, to `Various Artists`. Keep any NAS bind-mounted
+`data/artistmap.yaml` synchronized; an existing mounted map overrides the bundled
+map. Individual track credits remain intact.
+
+Compilation classification must be captured before applying `--varioustag`.
+The release grouping name (label or album title) is not a track performer and
+must not be inserted into missing track credits or used to suppress a legitimate
+genre merely because it matches an album title. Missing label falls back to
+Various Artists; use embedded LABEL, confirmed Discogs label, or validated
+label-storefront evidence. Do not guess a label from an arbitrary artist.

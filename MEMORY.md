@@ -8,7 +8,7 @@ this session has no general reminder/scheduling tool.
 # Project Memory
 
 Updated: 2026-11-04
-Current release: v0.1.43 (joint credits and performer/composer/conductor enrichment; container gate pending). Latest native media implementation details are in the final handoff entry.
+Current release: v0.1.46 (--varioustag compilation grouping; container gate pending). Latest native media implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -2677,3 +2677,91 @@ whitespace passed. Actual shared readiness script attempted and blocked by
 Docker daemon access; full .43 container gate remains pending host execution.
 Cargo.toml and Cargo.lock bumped together to0.1.43. No production file writes,
 commit, push, deployment or live classical-release acceptance performed.
+
+## Latest NAS process-only review and numeric Discogs identity fix, v0.1.44
+
+User supplied updated /mnt/backup/bcfunl-*4-cron.log after process-only run.
+Latest v0.1.43 block:10attempted,0published,33skipped,0failed,wall95.613s;
+10 current verified-existing skips plus23 history skips. No acquire rerun
+needed for metadata changes. New performer/composer/conductor tags were not
+written by this run because existing publications skip unchanged. User saw
+fresh-landing note and is changing destination for acceptance.
+
+Found genuine regression introduced by raw joint-credit validation: MONO OATH
+and Snowdrop rejected at fetched-detail stage although logged parsed artist,
+title and Japan/Worldwide country match. Read-only cached actual responses
+confirm raw artist name Mono (7), empty ANV, artist id208568. VCW provider
+parsed it to Mono, but raw validator compared numeric disambiguator literally.
+Fixed shared same_artist comparison to reuse vcw_metadata::positions::clean_artist
+after trimming trailing star. Meaningful (Live) qualifiers and title numeric
+parentheses remain significant. No sibling edits or source-name rewriting.
+
+Also canonicalized Various and Various Artists for comparison; latest run
+rejected Various Artists - American Dub Electronics, candidates38334492 and
+38202567 both artistVarious. User asked which VA release and is researching
+it; supplied exact title and both candidate IDs. No other alias broadening.
+
+Added full lookup regression for Mono (7) Japan, Mono (7)* Worldwide and
+Various compilation; negative qualifiers/other artists/title cases. 141tests
+passed,0failed,5ignored. Locked strict Clippy, fmt, locked optimized build,
+workflow regression and whitespace checks passed. Version0.1.44 in Cargo.toml
+and Cargo.lock; binary built2026-11-04T07:05:22Z. Actual shared readiness
+script attempted and blocked by session Docker preflight. Host must still
+run sh scripts/check-build.sh before deployment; no .44 container success
+or live Discogs lookup claimed. No agent push/deploy, NAS/history/tag writes.
+
+## v0.1.45: bare VA compilation alias
+
+Stue explicitly requested VA in the Various list. Added VA -> Various Artists
+to shared data/artistmap.yaml (case-insensitive). Discogs comparison now reuses
+map entries whose sole canonical value is Various Artists, so matching works
+both directions for VA/V/A/etc rather than source-only expansion. No generic
+artist alias loosening. Existing artist-specific track credits retained; album
+artist/folder canonical Various Artists and COMPILATION=1. New preparation test
+covers all7 spellings and per-track credits; lookup regression includes VA/va
+as source and VA/V/A as provider artist.
+
+142 tests passed,0failed,5ignored; fmt, locked strict Clippy, locked optimized
+build, workflow regression and whitespace checks passed. Binary v0.1.45 built
+2026-11-04T07:22:56Z. Actual shared readiness command attempted, blocked by
+session Docker daemon access; host image gate still pending. No commit/push,
+deploy or live data writes performed. NAS ./data bind mount overrides bundled
+map, so synchronize the mounted artistmap.yaml including VA entry when deploying.
+Docs/tag rules updated.
+
+## v0.1.46: --varioustag compilation grouping
+
+Stue requested --varioustag accepting {albumtitle}, {label}, {albumartist},
+default {albumartist}, to organize VA compilations under a label such as Soul
+Jazz Records. Implemented typed Clap enum, process-only explicit option,
+resources conflict, validated default/choices. {albumartist} preserves existing
+Various Artists behavior. {albumtitle} uses cleaned undecorated album title;
+{label} uses common embedded LABEL, or missing labels supplied from confirmed
+Discogs metadata, or proven label-compilation storefront evidence. Missing
+label falls back to Various Artists with a message. Existing embedded labels
+preserved; conflicting embedded labels require review for label selection.
+
+Selected grouping populates ARTIST/ALBUMARTIST/sort aliases and artist template
+fields/folder. Compilation bool is captured before replacement; COMPILATION=1
+remains under all policies. TRACKARTIST/PERFORMER/composer/conductor credits
+remain independent. No label/title inserted as missing performer, and chosen
+album-title grouping does not filter a legitimate genre such as Dub. Only VA
+classifications affected; noncompilation artist behavior unchanged. Existing
+files are not moved/retagged automatically. Source release artist in history
+remains unchanged. Use fresh landing to test.
+
+Reused existing Args as process_one context (timings + varioustag), avoiding an
+eighth argument/new options layer. prepare_tags gets explicit policy; baseline
+test callers use AlbumArtist default. Discogs Match now supplies label to LABEL
+only when absent, no extra request/DB column, label included in provenance.
+README, reference and tag rules document parameter and fallbacks.
+
+145 tests passed,0failed,5ignored. New tests cover all policies, VA flag and
+track credits, genre preservation, missing-label fallback, noncompilations,
+CLI validation/default, confirmed label fill/preservation, and actual offline
+CLI FLAC publication under Soul Jazz Records with readback and PCM equality.
+Fmt, locked strict Clippy, locked optimized build, workflow regression and
+whitespace checks passed. Binary v0.1.46 built2026-11-04T07:37:50Z. Actual
+readiness script attempted but blocked at Docker preflight in this session.
+Host must run sh scripts/check-build.sh; full container readiness not claimed.
+No agent commit/push/deploy or production data writes.

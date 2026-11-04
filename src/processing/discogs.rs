@@ -121,6 +121,7 @@ pub(super) struct Lookup {
 #[derive(Clone, Debug)]
 pub(super) struct Match {
     pub catalog: Option<String>,
+    label: Option<String>,
     pub genres: Vec<String>,
     pub evidence: Value,
     pub ids: Vec<String>,
@@ -210,12 +211,21 @@ fn same(a: &str, b: &str) -> bool {
 }
 fn same_artist(a: &str, b: &str) -> bool {
     let clean = |name: &str| {
-        name.trim()
-            .trim_end_matches('*')
+        let name = vcw_metadata::positions::clean_artist(name.trim().trim_end_matches('*').trim());
+        let name = name
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .to_lowercase()
+            .to_lowercase();
+        if name == "various"
+            || crate::sanitizing::mapped_artists(&name).is_some_and(|names| {
+                names.len() == 1 && names[0].eq_ignore_ascii_case("Various Artists")
+            })
+        {
+            "various artists".into()
+        } else {
+            name
+        }
     };
     let a = clean(a);
     !a.is_empty() && a == clean(b)
@@ -498,18 +508,19 @@ impl Lookup {
     }
 }
 fn selected(detail: &vcw_metadata::Release, artist: &str, album: &str, iso: &str) -> Match {
-    let catalog = catalog(&detail.catalog);
+    let catalog_number = catalog(&detail.catalog);
     let genres = crate::genres::normalize(&detail.genres, &[artist.to_owned()]);
     let ids = vec![detail.id.clone()];
     Match {
-        catalog: catalog.clone(),
+        catalog: catalog_number.clone(),
+        label: catalog(&detail.label),
         genres: genres.clone(),
         ids: ids.clone(),
         performers: Vec::new(),
         composers: Vec::new(),
         conductors: Vec::new(),
         evidence: json!({"provider":"discogs","kind":"release-match","release_ids":ids,
-            "artist":artist,"album":album,"country_iso":iso,"catalog":catalog,"genres":genres,
+            "artist":artist,"album":album,"country_iso":iso,"catalog":catalog_number,"label":detail.label,"genres":genres,
             "selection_policy":"first-eligible-in-provider-order","genre_policy":"selected-release",
             "matched_artists":[detail.album_artist],"matched_countries":[detail.country],
             "country_policy":"listed-country-or-worldwide"}),
@@ -549,6 +560,11 @@ pub(super) fn apply(release: &Release, tracks: &mut [Track], found: &Match) -> R
                     }
                 }
             }
+        }
+        if value(&track.tags, "LABEL").is_empty()
+            && let Some(label) = &found.label
+        {
+            track.tags.insert("LABEL".into(), vec![label.clone()]);
         }
         track.tags.insert("DISCOGSID".into(), found.ids.clone());
         track.tags.insert(
@@ -627,6 +643,57 @@ mod tests {
             cancel: Cancel::new(),
         }
     }
+    #[test]
+    fn confirmed_label_fills_missing_source_label_without_replacing_one() {
+        let (source, mut tracks) = source();
+        let mut release = detail(1, "CAT7", json!(["Ambient"]));
+        release["labels"][0]["name"] = json!("Soul Jazz Records");
+        let found = lookup(vec![release])
+            .find(&source, &tracks)
+            .unwrap()
+            .unwrap();
+        apply(&source, &mut tracks, &found);
+        assert_eq!(tracks[0].tags["LABEL"], ["Soul Jazz Records"]);
+        tracks[0]
+            .tags
+            .insert("LABEL".into(), vec!["Existing Label".into()]);
+        apply(&source, &mut tracks, &found);
+        assert_eq!(tracks[0].tags["LABEL"], ["Existing Label"]);
+    }
+
+    #[test]
+    fn discogs_numeric_artist_suffixes_and_various_compilations_match() {
+        for (artist, credited, iso) in [
+            ("MONO", "Mono (7)", "Japan"),
+            ("MONO", "Mono (7)*", "Worldwide"),
+            ("Various Artists", "Various", "Worldwide"),
+            ("VA", "Various", "Worldwide"),
+            ("va", "Various Artists", "Worldwide"),
+            ("Various Artists", "VA", "Worldwide"),
+            ("Various Artists", "V/A", "Worldwide"),
+        ] {
+            let (mut source, mut tracks) = source();
+            source.artist = artist.into();
+            source.country = "JP".into();
+            tracks[0]
+                .tags
+                .insert("ALBUMARTIST".into(), vec![artist.into()]);
+            let mut release = detail(1, "CAT7", json!(["Ambient"]));
+            release["artists"] = json!([{"name":credited,"anv":""}]);
+            release["country"] = json!(iso);
+            let found = lookup(vec![release])
+                .find(&source, &tracks)
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.catalog.as_deref(), Some("CAT7"));
+            assert_eq!(source.artist, artist);
+        }
+        assert!(!same_artist("Mono (Live)", "MONO"));
+        assert!(!same_artist("Mono 7", "MONO"));
+        assert!(!same_artist("Various Other Artists", "Various Artists"));
+        assert!(!same("Oath (7)", "Oath"));
+    }
+
     #[test]
     fn joint_release_credits_match_separators_and_import_explicit_album_performers() {
         for artists in [

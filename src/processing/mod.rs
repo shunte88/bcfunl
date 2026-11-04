@@ -238,6 +238,7 @@ fn prepare_tags(
     release: &Release,
     tracks: &mut [Track],
     template: &template::Template,
+    varioustag: crate::VariousTag,
 ) -> Result<Plan> {
     if let [track] = tracks
         && value(&track.tags, "TRACKNUMBER").is_empty()
@@ -286,6 +287,7 @@ fn prepare_tags(
         .map(|names| names[0].clone())
         .unwrap_or_else(|| crate::initcap(&artist));
     ensure!(!artist.is_empty(), "Missing album artist; requires review");
+    let compilation = artist.eq_ignore_ascii_case("Various Artists");
     let stale_prerelease = crate::collection::stale_prerelease(
         tracks.len() == 1,
         &chrono::NaiveDate::parse_from_str(&release.publish, "%Y-%m-%d")
@@ -314,6 +316,26 @@ fn prepare_tags(
     } else {
         source_album
     };
+    if compilation {
+        artist = match varioustag {
+            crate::VariousTag::AlbumArtist => artist,
+            crate::VariousTag::AlbumTitle => album.clone(),
+            crate::VariousTag::Label => {
+                let embedded_label = common(tracks, "LABEL")?;
+                if !embedded_label.is_empty() {
+                    embedded_label
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else if label_compilation {
+                    label.clone()
+                } else {
+                    eprintln!("  Compilation label missing; using Various Artists");
+                    artist
+                }
+            }
+        };
+    }
     let source_country = common(tracks, "RELEASECOUNTRY")?;
     let country_text = if source_country.is_empty() {
         &release.country
@@ -434,7 +456,7 @@ fn prepare_tags(
         }
         let mut track_artists = Vec::new();
         credits::append_names(&mut track_artists, &value(tags, "ARTIST"));
-        if track_artists.is_empty() && !artist.eq_ignore_ascii_case("Various Artists") {
+        if track_artists.is_empty() && !compilation {
             credits::append_names(&mut track_artists, &artist);
         }
         for name in &album_guests {
@@ -490,7 +512,10 @@ fn prepare_tags(
         if value(tags, "DATE").is_empty() {
             put(tags, "DATE", &release.publish);
         }
-        let mut known_artists = vec![release.artist.clone(), artist.clone()];
+        let mut known_artists = vec![release.artist.clone()];
+        if !compilation {
+            known_artists.push(artist.clone());
+        }
         for key in [
             "ARTIST",
             "ALBUMARTIST",
@@ -498,6 +523,9 @@ fn prepare_tags(
             "PERFORMER",
             "REMIXER",
         ] {
+            if compilation && matches!(key, "ARTIST" | "ALBUMARTIST") {
+                continue;
+            }
             for name in tags.get(key).into_iter().flatten() {
                 known_artists.extend(credits::artist_names(name));
             }
@@ -515,7 +543,7 @@ fn prepare_tags(
         } else {
             tags.remove("GENRE");
         }
-        if artist.eq_ignore_ascii_case("Various Artists") {
+        if compilation {
             put(tags, "COMPILATION", 1);
         }
         put(tags, "BCFUNL_ITEM_KEY", &release.key);
@@ -873,9 +901,9 @@ fn process_one(
     template: &template::Template,
     library: Option<&genres::Library>,
     lookup: Option<&discogs::Lookup>,
-    timings: bool,
+    args: &Args,
 ) -> Result<(PathBuf, Plan, bool)> {
-    let mut timing = Timing::new(release, timings);
+    let mut timing = Timing::new(release, args.timings);
     let meta = fs::symlink_metadata(&release.source).context("Read downloaded source")?;
     ensure!(
         meta.is_file() && !meta.file_type().is_symlink(),
@@ -948,7 +976,7 @@ fn process_one(
         }
     }
     timing.next("prepare_tags");
-    let mut plan = prepare_tags(&enriched, &mut tracks, template)?;
+    let mut plan = prepare_tags(&enriched, &mut tracks, template, args.varioustag)?;
     plan.discogs_metadata = matched.as_ref().map(|found| found.evidence.clone());
     timing.next("verify_existing");
     if let Some(existing) = existing(server, &plan, &tracks)? {
@@ -1019,7 +1047,7 @@ fn process_one(
         }
     }
 
-    if timings {
+    if args.timings {
         for (name, elapsed) in [
             "copy",
             "write_tags",
@@ -1333,7 +1361,7 @@ pub fn run(args: &Args) -> Result<()> {
                         template,
                         library.as_ref().filter(|_| args.offline),
                         lookup,
-                        args.timings,
+                        args,
                     )
                 }),
             ));

@@ -41,6 +41,17 @@ enum Format {
     Mp3,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum VariousTag {
+    #[default]
+    #[value(name = "{albumartist}")]
+    AlbumArtist,
+    #[value(name = "{albumtitle}")]
+    AlbumTitle,
+    #[value(name = "{label}")]
+    Label,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     version = concat!("v", env!("CARGO_PKG_VERSION"), " (built ", env!("BCFUNL_BUILD_DATE"), ")"),
@@ -87,7 +98,7 @@ struct Args {
     #[arg(long)]
     clean: bool,
     /// Acquire/import current Discogs artists and masters snapshots into resources/library.sqlite3
-    #[arg(long, conflicts_with_all = ["process", "clean", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template"])]
+    #[arg(long, conflicts_with_all = ["process", "clean", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template", "varioustag"])]
     resources: bool,
     /// Import an existing Discogs artists XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
@@ -104,6 +115,14 @@ struct Args {
     /// Relative output naming rule; the audio extension is appended
     #[arg(long, requires = "process")]
     template: Option<String>,
+    /// Compilation release artist: {albumartist}, {albumtitle}, or {label}
+    #[arg(
+        long,
+        value_enum,
+        default_value = "{albumartist}",
+        requires = "process"
+    )]
+    varioustag: VariousTag,
     #[arg(long, default_value = "bandcamp.cookies.txt")]
     cookies: PathBuf,
 }

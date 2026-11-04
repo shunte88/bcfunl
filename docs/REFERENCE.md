@@ -72,6 +72,7 @@ Options:
 | `--serverdir` | Required library destination for processing. |
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
 | `--template` | Processing filename rule; defaults to the example below. |
+| `--varioustag` | Compilation release artist: `{albumartist}` (default), `{label}`, or `{albumtitle}`. Requires `--process`. |
 
 For example, `--fromdt 2026-11-01 --todt 2026-11-30` selects purchases made in November 
 2026. Unknown purchase dates are excluded when a date filter is active.
@@ -941,3 +942,39 @@ when supplied. These credits come from the already cached confirmed release,
 with no extra HTTP request. Producer-only and track-scoped credits are excluded.
 The source album artist and naming convention remain unchanged. This does not
 retag previously published releases in place.
+
+Discogs artist identity comparison reuses VCW's numeric disambiguation cleanup:
+`Mono (7)` matches `MONO`, while meaningful qualifiers such as `(Live)` remain.
+`Various` and `Various Artists` are equivalent compilation credits. These rules
+apply to artist comparisons only; source display names and album titles remain
+unchanged.
+
+The artist map also canonicalizes bare `VA` (case-insensitive), alongside
+`V/A`, `V.A.`, `V_A` and `Various`, to `Various Artists`. Keep any NAS bind-mounted
+`data/artistmap.yaml` synchronized; an existing mounted map overrides the bundled
+map. Individual track credits remain intact.
+
+### Compilation release artist
+
+`--varioustag` changes the release grouping only for compilations recognized as
+Various Artists (including mapped VA variants and confirmed label-storefront
+compilations). Noncompilation releases keep their artist. Quote the value:
+
+```sh
+./bcfunl --process --user johnsmith --output ./downloads \
+  --serverdir /path/to/music --varioustag '{label}'
+```
+
+- `{albumartist}` retains the default `Various Artists` grouping.
+- `{label}` uses the embedded LABEL, or a confirmed Discogs label when absent.
+  A validated label-storefront compilation can supply its storefront label.
+  If no label is available, keep `Various Artists` and report the fallback.
+- `{albumtitle}` uses the cleaned album title without country/catalog decoration.
+
+The chosen value supplies ARTIST, ALBUMARTIST and their sort tags, plus the
+`{artist}`/`{albumartist}` template fields. `COMPILATION=1` remains set under
+all policies. Individual TRACKARTIST/PERFORMER credits and composer/conductor
+values are preserved. LABEL remains label metadata. Existing embedded labels
+take precedence over Discogs; conflicting embedded labels require review when
+using `{label}`. Existing server files are never moved or retagged automatically.
+Use a fresh destination to inspect the changed grouping.

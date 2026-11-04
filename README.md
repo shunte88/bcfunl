@@ -51,6 +51,12 @@ Process downloaded releases into a separate library:
   --serverdir /path/to/music --parallel 2 --summary
 ```
 
+For compilations, keep the default `Various Artists` grouping or use
+`--varioustag '{label}'` to group by label, such as Soul Jazz Records.
+`--varioustag '{albumtitle}'` uses the cleaned album title instead. Individual
+track credits and the compilation flag are preserved; a missing label falls
+back to `Various Artists`.
+
 Default filename template:
 
 ```text

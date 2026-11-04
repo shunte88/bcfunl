@@ -70,6 +70,7 @@ fn processing_normalizes_combined_genres_with_shared_map() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(
@@ -88,6 +89,7 @@ fn processing_normalizes_combined_genres_with_shared_map() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(
@@ -252,6 +254,7 @@ fn compilation_plan_preserves_per_track_performers_and_missing_catalog() {
         &release(path),
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(plan.artist, "Various Artists");
@@ -283,6 +286,7 @@ fn processing_arguments_require_server_and_do_not_load_cookies() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(plan.directory, PathBuf::from("Romy/Proof"));
@@ -401,7 +405,7 @@ fn matching_names_with_different_audio_are_not_skipped_or_overwritten() {
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
         None,
-        false,
+        &Args::try_parse_from(["bcfunl", "--user", "johnsmith"]).unwrap(),
     );
     assert!(result.is_err());
     assert_eq!(fs::read(&dest).unwrap(), original);
@@ -443,7 +447,7 @@ fn embedded_artwork_survives_tagging_and_supplies_folder_image() {
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
         None,
-        false,
+        &Args::try_parse_from(["bcfunl", "--user", "johnsmith"]).unwrap(),
     )
     .unwrap();
     assert!(
@@ -518,6 +522,7 @@ fn label_compilation_uses_various_artists_and_retains_the_label() {
         &release(path),
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(plan.artist, "Various Artists");
@@ -563,6 +568,7 @@ fn a_known_single_performer_fills_missing_album_artist_before_storefront() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(plan.artist, "Actual Performer");
@@ -611,6 +617,7 @@ fn david_holmes_album_credits_and_remix_case_roundtrip() {
             &source,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         assert_eq!(
@@ -662,6 +669,7 @@ fn album_cleanup_is_conservative_and_captured_guests_fill_matching_plain_album()
         &source,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(
@@ -742,6 +750,7 @@ fn processing_extracts_catalog_from_embedded_album_and_uses_clean_name() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(plan.catalog, "CATALO546");
@@ -872,14 +881,14 @@ fn single_audio_defaults_missing_numbers_but_multiple_tracks_require_numbering()
     let template = template::Template::new(template::DEFAULT).unwrap();
     let mut multiple = vec![track.clone(), track.clone()];
     assert!(
-        prepare_tags(&r, &mut multiple, &template)
+        prepare_tags(&r, &mut multiple, &template, crate::VariousTag::AlbumArtist,)
             .err()
             .unwrap()
             .to_string()
             .contains("Missing track number")
     );
     let mut single = vec![track.clone()];
-    let plan = prepare_tags(&r, &mut single, &template).unwrap();
+    let plan = prepare_tags(&r, &mut single, &template, crate::VariousTag::AlbumArtist).unwrap();
     assert_eq!(value(&single[0].tags, "TRACKNUMBER"), "1");
     assert_eq!(value(&single[0].tags, "DISCNUMBER"), "1");
     for field in ["TRACKTOTAL", "TOTALTRACKS", "DISCTOTAL", "TOTALDISCS"] {
@@ -896,12 +905,12 @@ fn single_audio_defaults_missing_numbers_but_multiple_tracks_require_numbering()
     let mut numbered = vec![track.clone()];
     put(&mut numbered[0].tags, "TRACKNUMBER", 7);
     put(&mut numbered[0].tags, "DISCNUMBER", 2);
-    prepare_tags(&r, &mut numbered, &template).unwrap();
+    prepare_tags(&r, &mut numbered, &template, crate::VariousTag::AlbumArtist).unwrap();
     assert_eq!(value(&numbered[0].tags, "TRACKNUMBER"), "7");
     assert_eq!(value(&numbered[0].tags, "DISCNUMBER"), "2");
     let mut invalid = vec![track];
     put(&mut invalid[0].tags, "TRACKNUMBER", "invalid");
-    assert!(prepare_tags(&r, &mut invalid, &template).is_err());
+    assert!(prepare_tags(&r, &mut invalid, &template, crate::VariousTag::AlbumArtist,).is_err());
 }
 
 #[test]
@@ -927,6 +936,7 @@ fn mapped_collaborations_keep_separate_credits_and_canonical_case() {
             &r,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         assert_eq!(plan.artist, "bvdub");
@@ -977,6 +987,7 @@ fn mapped_title_phrase_moves_only_to_affected_track_credits() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(tracks[0].tags["TITLE"], ["Song"]);
@@ -1034,6 +1045,7 @@ fn self_named_and_ampersand_expansions_roundtrip_without_changing_album_artist()
             &r,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         assert_eq!(plan.artist, "Martin Stephenson And The Daintees");
@@ -1290,6 +1302,7 @@ fn processing_leading_catalogs_preserve_album_subtitles_and_existing_catalogs() 
                 &r,
                 &mut tracks,
                 &template::Template::new(template::DEFAULT).unwrap(),
+                crate::VariousTag::AlbumArtist,
             )
             .unwrap();
             let expected_catalog = existing.unwrap_or(catalog);
@@ -1342,6 +1355,7 @@ fn stale_releases_lose_explicit_prerelease_markers() {
             &r,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         assert_eq!(plan.album.contains("Pre-Release"), !strip);
@@ -1377,6 +1391,7 @@ fn ombra_catalog_only_album_keeps_title_and_formats_country_and_catalog() {
             &r,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         let code = existing.unwrap_or("OMBRA INTL 006");
@@ -1410,6 +1425,7 @@ fn processing_removes_rejected_existing_genres_instead_of_leaving_old_tags() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert!(!tracks[0].tags.contains_key("GENRE"));
@@ -1418,6 +1434,7 @@ fn processing_removes_rejected_existing_genres_instead_of_leaving_old_tags() {
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     assert_eq!(tracks[0].tags["GENRE"], ["Ambient", "Post-Punk"]);
@@ -1472,6 +1489,7 @@ fn existing_scan_ignores_unrelated_temporary_folders_but_keeps_real_duplicate_re
         &r,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     // An unrelated broken link is never probed as a candidate artist directory.
@@ -1667,6 +1685,7 @@ fn multiple_tracks_and_releases_share_bounded_native_workers() {
                         &release(path.clone()),
                         &mut tracks,
                         &template::Template::new(template::DEFAULT).unwrap(),
+                        crate::VariousTag::AlbumArtist,
                     )
                     .unwrap();
                     file_pool().unwrap().install(|| {
@@ -1943,6 +1962,7 @@ fn comma_performer_lists_expand_without_splitting_sort_names_or_mapped_bands() {
             &release(path),
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         )
         .unwrap();
         assert_eq!(plan.artist, "Amevicious");
@@ -1988,6 +2008,7 @@ fn six_strings_track_credits_do_not_inherit_other_album_performers() {
         &release,
         &mut tracks,
         &template::Template::new(template::DEFAULT).unwrap(),
+        crate::VariousTag::AlbumArtist,
     )
     .unwrap();
     for (track, (title, names)) in tracks.iter().zip(expected) {
@@ -2014,7 +2035,7 @@ fn discogs_enrichment_precedes_template_and_publishes_authoritative_genres() {
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
         Some(&lookup),
-        false,
+        &Args::try_parse_from(["bcfunl", "--user", "johnsmith"]).unwrap(),
     )
     .unwrap();
     assert!(!skipped);
@@ -2072,7 +2093,7 @@ fn unmatched_processing_keeps_only_recognized_source_genres() {
         &template::Template::new(template::DEFAULT).unwrap(),
         None,
         None,
-        false,
+        &Args::try_parse_from(["bcfunl", "--user", "johnsmith"]).unwrap(),
     )
     .unwrap();
     let files = tracks(&collect(&destination).unwrap()).unwrap();
@@ -2113,6 +2134,7 @@ fn album_catalog_track_decorations_work_across_labels_and_preserve_known_catalog
                 &release,
                 &mut tracks,
                 &template::Template::new(template::DEFAULT).unwrap(),
+                crate::VariousTag::AlbumArtist,
             )
             .unwrap();
             let expected = existing
@@ -2179,6 +2201,7 @@ fn track_catalog_inference_accepts_spacing_variants_but_rejects_conflicting_code
             &release,
             &mut tracks,
             &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
         );
         if valid {
             let plan = result.unwrap();
@@ -2223,4 +2246,184 @@ fn existing_release_read_only_acceptance() {
     let work = tempfile::tempdir().unwrap();
     let source = tracks(&extract(Path::new(&archive), work.path()).unwrap()).unwrap();
     assert!(matching_release(&source, Path::new(&destination)).unwrap());
+}
+
+#[test]
+fn compilation_artist_spellings_keep_track_credits() {
+    for alias in [
+        "Various Artists",
+        "VARIOUS",
+        "V/A",
+        "V.A.",
+        "V_A",
+        "VA",
+        "va",
+    ] {
+        let mut tags = sample();
+        put(&mut tags, "ALBUMARTIST", alias);
+        let path = PathBuf::from("unused.flac");
+        let mut tracks = vec![Track {
+            path: path.clone(),
+            tags,
+            duration: 1.0,
+        }];
+        let plan = prepare_tags(
+            &release(path),
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+            crate::VariousTag::AlbumArtist,
+        )
+        .unwrap();
+        assert_eq!(plan.artist, "Various Artists", "{alias}");
+        assert_eq!(value(&tracks[0].tags, "ALBUMARTIST"), "Various Artists");
+        assert_eq!(value(&tracks[0].tags, "COMPILATION"), "1");
+        assert_eq!(tracks[0].tags["TRACKARTIST"], ["Romy", "Peaches"]);
+    }
+}
+
+#[test]
+fn compilation_artist_policy_preserves_flag_track_credits_and_genres() {
+    use crate::VariousTag;
+    for (policy, label, expected) in [
+        (
+            VariousTag::AlbumArtist,
+            Some("Soul Jazz Records"),
+            "Various Artists",
+        ),
+        (
+            VariousTag::Label,
+            Some("Soul Jazz Records"),
+            "Soul Jazz Records",
+        ),
+        (VariousTag::Label, None, "Various Artists"),
+        (VariousTag::AlbumTitle, Some("Soul Jazz Records"), "Dub"),
+    ] {
+        let mut tracks = Vec::new();
+        for (n, name) in [(1, "First Performer"), (2, "Second Performer")] {
+            let mut tags = sample();
+            put(&mut tags, "ALBUMARTIST", "VA");
+            put(&mut tags, "ALBUM", "Dub");
+            put(&mut tags, "ARTIST", name);
+            put(&mut tags, "TITLE", format!("Track {n}"));
+            put(&mut tags, "TRACKNUMBER", n);
+            put(&mut tags, "GENRE", "Dub");
+            if let Some(label) = label {
+                put(&mut tags, "LABEL", label);
+            }
+            tracks.push(Track {
+                path: "unused.flac".into(),
+                tags,
+                duration: 1.0,
+            });
+        }
+        let mut source = release("unused.flac".into());
+        source.artist = "Various Artists".into();
+        source.genre = "Dub".into();
+        let plan = super::prepare_tags(
+            &source,
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(plan.artist, expected);
+        assert_eq!(
+            plan.directory,
+            PathBuf::from(format!("{expected}/Dub [GB] [CAT01]"))
+        );
+        for (track, name) in tracks.iter().zip(["First Performer", "Second Performer"]) {
+            for tag in ["ARTIST", "ALBUMARTIST", "ARTISTSORT", "ALBUMARTISTSORT"] {
+                assert_eq!(value(&track.tags, tag), expected);
+            }
+            assert_eq!(value(&track.tags, "COMPILATION"), "1");
+            assert_eq!(track.tags["TRACKARTIST"], [name]);
+            assert_eq!(track.tags["PERFORMER"], [name]);
+            assert_eq!(track.tags["GENRE"], ["Dub"]);
+        }
+    }
+    for policy in [VariousTag::Label, VariousTag::AlbumTitle] {
+        let mut tracks = vec![Track {
+            path: "unused.flac".into(),
+            tags: sample(),
+            duration: 1.0,
+        }];
+        put(&mut tracks[0].tags, "LABEL", "Soul Jazz Records");
+        let plan = super::prepare_tags(
+            &release("unused.flac".into()),
+            &mut tracks,
+            &template::Template::new(template::DEFAULT).unwrap(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(plan.artist, "Romy");
+        assert!(value(&tracks[0].tags, "COMPILATION").is_empty());
+    }
+}
+
+#[test]
+fn compilation_policy_cli_defaults_validation_and_label_publication() {
+    use crate::VariousTag;
+    assert_eq!(
+        Args::try_parse_from(["bcfunl"]).unwrap().varioustag,
+        VariousTag::AlbumArtist
+    );
+    for (text, expected) in [
+        ("{label}", VariousTag::Label),
+        ("{albumtitle}", VariousTag::AlbumTitle),
+        ("{albumartist}", VariousTag::AlbumArtist),
+    ] {
+        let args = Args::try_parse_from([
+            "bcfunl",
+            "--process",
+            "--serverdir",
+            "unused",
+            "--varioustag",
+            text,
+        ])
+        .unwrap();
+        assert_eq!(args.varioustag, expected);
+    }
+    assert!(Args::try_parse_from(["bcfunl", "--varioustag", "{label}"]).is_err());
+    assert!(
+        Args::try_parse_from([
+            "bcfunl",
+            "--process",
+            "--serverdir",
+            "unused",
+            "--varioustag",
+            "{unknown}"
+        ])
+        .is_err()
+    );
+    let (input, path) = fixture("flac");
+    let server = tempfile::tempdir().unwrap();
+    let mut tags = sample();
+    put(&mut tags, "ALBUMARTIST", "Various Artists");
+    put(&mut tags, "LABEL", "Soul Jazz Records");
+    tagging::write(&path, &tags).unwrap();
+    let database = input.path().join("collection.sqlite3");
+    let db = Database::open(database.to_str().unwrap()).unwrap();
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path,country_iso) VALUES('johnsmith','album1','Various Artists','Proof','https://bandcamp.com/download','complete',?,'GB')",&[path.to_str().unwrap()]).unwrap();
+    drop(db);
+    let args = Args::try_parse_from([
+        "bcfunl",
+        "--process",
+        "--offline",
+        "--user",
+        "johnsmith",
+        "--output",
+        input.path().to_str().unwrap(),
+        "--serverdir",
+        server.path().to_str().unwrap(),
+        "--varioustag",
+        "{label}",
+    ])
+    .unwrap();
+    run(&args).unwrap();
+    let folder = server.path().join("Soul Jazz Records/Proof [GB] [CAT01]");
+    let found = tracks(&collect(&folder).unwrap()).unwrap();
+    assert_eq!(value(&found[0].tags, "ALBUMARTIST"), "Soul Jazz Records");
+    assert_eq!(value(&found[0].tags, "COMPILATION"), "1");
+    assert_eq!(found[0].tags["TRACKARTIST"], ["Romy", "Peaches"]);
+    assert_eq!(pcm_hash(&path).unwrap(), pcm_hash(&found[0].path).unwrap());
 }
