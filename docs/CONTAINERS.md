@@ -166,12 +166,32 @@ have been removed from the active build matrix.
 
 The workflow checks out `shunte88/vcw` alongside this repository. If that
 repository is private, configure a read-only `VCW_READ_TOKEN` Actions secret with
-access to it. Optionally set repository variable `VCW_REF` to a specific commit
-or branch; the default is `main`. The lockfile remains enforced. Actions artifacts
+access to it. Both jobs use the exact commit in `.github/vcw-revision`, matching
+the sibling source used to generate `Cargo.lock`. The former `VCW_REF` repository
+variable is no longer used. To update VCW, update the pin and local sibling
+checkout together, regenerate and review Cargo.lock locally, then run the full
+readiness check. CI always keeps `--locked`. Actions artifacts
 are named with the platform and commit SHA, so pushes with an unchanged version
 still produce distinct packages. Each artifact contains a tar.gz archive to
 preserve Unix executable permissions. Tools required by native binaries are installed
 separately; the Linux container includes them.
+
+Run the same native, container and artifact checks as CI before declaring a
+build ready:
+
+```sh
+sudo -v # only when your Docker daemon requires sudo
+sh scripts/check-build.sh
+```
+
+The sibling `../vcw` must be at the pinned commit with unchanged dependency
+sources. Requires stable Rust with rustfmt and Clippy, the documented build/test
+tools, and Docker with Buildx. Run the script as your normal user. It checks
+Docker access first and uses `sudo -n` for Docker alone when needed, keeping
+Cargo under your normal account. Authenticate first with `sudo -v` on hosts
+that require it. The artifact is
+`target/package/bcfunl-linux-x64.tar.gz`. Without Docker daemon access, the image
+gate remains unverified even if the native build passes.
 
 Image execution needs a working Docker daemon and dataset access. A successful
 image pull does not by itself verify dataset permissions or processing.

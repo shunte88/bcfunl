@@ -44,6 +44,13 @@ outputs belong under <output>/resources/; never commit extracts or SQLite files.
 
 Validation commands: cargo test --offline; cargo fmt --check;
 cargo clippy --offline --all-targets -- -D warnings; cargo build --offline --release.
+Release readiness additionally requires `sh scripts/check-build.sh`, the same
+script executed by `.github/workflows/build.yml`. It verifies the pinned sibling
+VCW revision, locked Cargo build/tests, builds and runs the Docker image, and
+packages the Linux artifact. Docker daemon access is required. If unavailable,
+report the container gate as blocked; do not claim full readiness. Keep
+`.github/vcw-revision` and Cargo.lock synchronized when updating VCW. Never
+remove `--locked` or regenerate Cargo.lock silently in CI to hide dependency drift.
 README documents system dependencies and the sibling VCW build dependency.
 
 ## Documentation Preferences

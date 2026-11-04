@@ -1988,3 +1988,56 @@ remain uncommitted in this session; no commit, push or deployment performed.
 Previous accepted changes were committed by the host as f8f9936. The .git
 directory remains read-only to this session. Do not reopen metadata refinement
 or change the acquire count cap without a new request.
+
+## Build workflow lockfile failure and readiness gate
+
+User reports GitHub builds failing for a day with cargo +stable build --locked
+--release requiring a Cargo.lock update. Local identical locked/offline build
+passes. Both CI jobs previously checked out configurable VCW_REF/default main,
+allowing dependency manifests to drift from the local lockfile. GitHub API and
+remote DNS inaccessible here, so the exact VCW revision of failed runs was not
+retrieved. Reproduced the same failure in a disposable clean CI/Docker source
+layout by changing ONLY VCW workspace version; the clean pinned layout resolves
+with Cargo.lock unchanged. Evidence supports dependency drift, not a reason to
+remove --locked.
+
+Added .github/vcw-revision = 69fa79c5f2d361faab2229a710fa83ed46edce23 (local
+HEAD and cached origin/main). Both jobs read this pin; VCW_REF variable no longer
+used. No sibling modifications. Cargo.lock stays unchanged. Added explicit
+docker/setup-buildx-action@v3 to both jobs. New scripts/check-build.sh is run
+by CI and local readiness: pinned clean VCW sources, fmt, strict locked Clippy,
+locked release build and tests, Docker build/runtime checks, Linux packaging
+under target/package. New standard-library scripts/test-build-workflow.py
+checks command arguments and gate failure propagation with disposable stubs,
+including pinned/dirty sources, build/Docker failure, successful packaging,
+sudo-only Docker access and absent sudo credentials. Workflow runs those tests.
+AGENTS.md and docs now REQUIRE exercising this workflow script for readiness,
+reporting a blocked Docker gate explicitly. Configuration-only change: version
+remains v0.1.40. No commit/push/deployment by agent.
+
+Validation: actual shared gate ran fmt, strict locked Clippy, locked release
+build, all138 tests (4ignored) and version successfully. Docker initially lacked
+Buildx. User installed Ubuntu docker-buildx and confirmed Docker info works
+with sudo. Session has no-new-privileges flag and cannot use sudo/daemon socket.
+Script now preflights access, uses sudo -n for Docker ONLY when necessary,
+never elevates Cargo. User host command: cd /data2/bcfunl && sudo -v &&
+sh scripts/check-build.sh (do not run whole script with sudo). Buildx version
+now installed locally. Complete actual container build still BLOCKED for agent;
+await host script result before claiming full CI/image readiness. Packaging
+commands tested with stubs and real tar; no actual container success claimed.
+Workflow YAML and every shell block checked; both pinned checkouts, Buildx
+setup and shared readiness/test entrypoints asserted. New gate regression tests
+and shell syntax/whitespace checks passed. GitHub hosted run not observed.
+
+## Host full build workflow acceptance
+
+Stue added the host user to the docker group and ran scripts/check-build.sh
+successfully. Reported final output: image bcfunl:ci built with SHA256
+0aa7a99b008c3f03454cc6950bb4be4cc55a839855def924f6964e1b6aa7a26b;
+container binary bcfunl v0.1.40 built 2026-11-04T02:49:40Z; aria2c, flock and
+sqlite3 found; "Build workflow checks passed: locked native build, tests,
+container and package." This closes the previously blocked LOCAL container
+and packaging readiness gate, based on host output. Sudo workaround no longer
+needed for this host user. Hosted GitHub Actions rerun, GHCR publication, NAS
+deployment and NAS processing acceptance remain unverified. No agent push or
+deployment performed.

@@ -11,6 +11,12 @@ Parallel mode additionally requires a working `aria2c` on PATH.
 Builds reuse the sibling VCW checkout at `../vcw` (`vcw-metadata` and
 `vcw-types`). Keep that checkout available when building
 on another machine; the compiled executable does not need it at runtime.
+Use the commit in `.github/vcw-revision`, matching CI and Cargo.lock.
+Before declaring a release ready, run `python3 scripts/test-build-workflow.py`
+and `sh scripts/check-build.sh`; the latter requires Docker with Buildx and
+exercises the same locked build, image checks and packaging used by build.yml.
+Run it as your normal user; if Docker needs sudo, run `sudo -v` first. The
+script elevates Docker calls only, never Cargo.
 Export your logged-in **bandcamp.com** cookies in Netscape format.
 
 ### External utilities
