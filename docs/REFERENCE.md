@@ -923,3 +923,21 @@ Every copy checks cancellation between 128 KiB blocks. Limits are 100,000 member
 64 GiB per member and 1 TiB total declared output. Unsupported compression or
 encrypted archives fail with their source retained. Directory walking is native,
 iterative, sorted and refuses symlinks.
+
+Discogs joint release credits are compared as complete artist combinations,
+allowing comma, semicolon, slash, ampersand and `and` separators and ignoring
+order, case and trailing alternate-name asterisks. Every credited member must
+match one-to-one through confirmed aliases. Existing reciprocal band aliases
+remain supported; a partial artist or unrelated real-name performer is not a
+match. Full release artist arrays are checked, not only their first entry.
+Vinyl side layouts and digital track counts do not constrain this lookup;
+artist combination, title and country remain required.
+
+Explicit album-wide Discogs `Performer` credits are appended to PERFORMER;
+`Composer` and `Composed By` credits are appended to COMPOSER;
+`Conductor` and `Conducted By` credits are appended to CONDUCTOR,
+preserving existing values and preferring the displayed artist-name variation
+when supplied. These credits come from the already cached confirmed release,
+with no extra HTTP request. Producer-only and track-scoped credits are excluded.
+The source album artist and naming convention remain unchanged. This does not
+retag previously published releases in place.

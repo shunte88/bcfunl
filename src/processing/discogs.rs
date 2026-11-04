@@ -115,6 +115,7 @@ impl Clock for SignalClock {
 
 pub(super) struct Lookup {
     provider: Discogs,
+    cache: Arc<dyn vcw_metadata::cache::Cache>,
     cancel: Cancel,
 }
 #[derive(Clone, Debug)]
@@ -123,6 +124,9 @@ pub(super) struct Match {
     pub genres: Vec<String>,
     pub evidence: Value,
     pub ids: Vec<String>,
+    performers: Vec<String>,
+    composers: Vec<String>,
+    conductors: Vec<String>,
 }
 fn country(value: &str) -> String {
     if value.eq_ignore_ascii_case("EU") || value.eq_ignore_ascii_case("Europe") {
@@ -233,6 +237,90 @@ fn artist_aliases(artist: &str) -> Vec<String> {
     }
     aliases
 }
+fn credit_members(credit: &str) -> Vec<String> {
+    if crate::sanitizing::mapped_artists(credit)
+        .is_some_and(|names| names.len() == 1 && same_artist(&names[0], credit))
+    {
+        return vec![credit.to_owned()];
+    }
+    let mut pending = vec![credit];
+    let mut names = Vec::new();
+    while let Some(name) = pending.pop() {
+        let lower = name.to_ascii_lowercase();
+        if let Some((pos, separator)) = [";", ", ", "|", " / ", " & ", " and "]
+            .iter()
+            .find_map(|separator| lower.find(separator).map(|pos| (pos, *separator)))
+        {
+            pending.push(&name[pos + separator.len()..]);
+            pending.push(&name[..pos]);
+        } else {
+            let name = name.trim().trim_end_matches('*').trim();
+            if !name.is_empty() && !names.iter().any(|old: &String| same_artist(old, name)) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
+}
+fn same_credit(actual: &str, expected: &str, aliases: &[String]) -> bool {
+    let expected = credit_members(expected);
+    if expected.len() <= 1
+        || expected
+            .iter()
+            .all(|name| aliases.iter().any(|alias| same_artist(name, alias)))
+    {
+        return aliases.iter().any(|alias| same_artist(actual, alias));
+    }
+    let actual = credit_members(actual);
+    let mut used = std::collections::HashSet::new();
+    actual.len() == expected.len()
+        && expected.iter().all(|name| {
+            let aliases = artist_aliases(name);
+            actual
+                .iter()
+                .enumerate()
+                .find(|(index, credit)| {
+                    !used.contains(index) && aliases.iter().any(|alias| same_artist(credit, alias))
+                })
+                .is_some_and(|(index, _)| used.insert(index))
+        })
+}
+
+fn album_credits(body: &Value, roles: &[&str]) -> Vec<String> {
+    let mut names = Vec::new();
+    for credit in body["extraartists"].as_array().into_iter().flatten() {
+        if !credit["tracks"].as_str().unwrap_or("").trim().is_empty() {
+            continue;
+        }
+        if credit["role"].as_str().is_some_and(|role| {
+            role.split(',').any(|role| {
+                let role = role
+                    .trim()
+                    .split('[')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .replace('-', " ");
+                roles
+                    .iter()
+                    .any(|expected| role.eq_ignore_ascii_case(expected))
+            })
+        }) {
+            let name = credit["anv"]
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .or_else(|| credit["name"].as_str())
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches('*')
+                .trim();
+            if !name.is_empty() && !names.iter().any(|old: &String| same_artist(old, name)) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
+}
 fn catalog(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()
@@ -249,12 +337,13 @@ impl Lookup {
         };
         let transport = Arc::new(Http::new()?);
         let cancel = Cancel::new();
+        let cache = Arc::new(vcw_metadata::cache::Disk::new(cache));
         let client = Client::new(ProviderId::Discogs, transport.clone())
             .with_clock(Arc::new(SignalClock {
                 clock: SystemClock::new(),
                 cancel: cancel.clone(),
             }))
-            .with_cache(Arc::new(vcw_metadata::cache::Disk::new(cache)))
+            .with_cache(cache.clone())
             .with_user_agent(format!(
                 "bcfunl/{} (private collection metadata)",
                 env!("CARGO_PKG_VERSION")
@@ -264,18 +353,27 @@ impl Lookup {
                 .with_client(client)
                 .with_genres(vcw_metadata::Genres::empty())
                 .with_token(Some(token)),
+            cache,
             cancel,
         }))
     }
     pub(super) fn find(&self, release: &Release, tracks: &[Track]) -> Result<Option<Match>> {
         shutdown::check()?;
-        let artist = common(tracks, "ALBUMARTIST")?;
-        let artist = if artist.is_empty() {
-            &release.artist
-        } else {
-            &artist
-        };
-        let artist = super::credits::artist_names(artist)
+        let credits: std::collections::HashSet<_> = tracks
+            .iter()
+            .filter_map(|track| track.tags.get("ALBUMARTIST"))
+            .map(|values| values.join(";"))
+            .filter(|value| !value.trim().is_empty())
+            .collect();
+        ensure!(
+            credits.len() <= 1,
+            "Conflicting ALBUMARTIST values require review"
+        );
+        let credit = credits
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| release.artist.clone());
+        let artist = super::credits::artist_names(&credit)
             .into_iter()
             .next()
             .unwrap_or_default();
@@ -318,10 +416,7 @@ impl Lookup {
             );
             for candidate in candidates {
                 shutdown::check()?;
-                let reason = if !aliases
-                    .iter()
-                    .any(|alias| same_artist(&candidate.artist, alias))
-                {
+                let reason = if !same_credit(&candidate.artist, &credit, &aliases) {
                     Some(format!(
                         "artist {:?} is not a confirmed alias",
                         candidate.artist
@@ -349,9 +444,32 @@ impl Lookup {
                     continue;
                 }
                 let detail = self.provider.fetch(&candidate.id, &self.cancel)?;
-                if aliases
-                    .iter()
-                    .any(|alias| same_artist(&detail.album_artist, alias))
+                let body: Value = self
+                    .cache
+                    .get(&vcw_metadata::cache::key(
+                        ProviderId::Discogs,
+                        &Discogs::release_url(&candidate.id),
+                    ))
+                    .map(|bytes| serde_json::from_slice(&bytes))
+                    .transpose()?
+                    .unwrap_or(Value::Null);
+                let artists: Vec<_> = body["artists"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|artist| {
+                        artist["anv"]
+                            .as_str()
+                            .filter(|name| !name.trim().is_empty())
+                            .or_else(|| artist["name"].as_str())
+                    })
+                    .collect();
+                let detail_credit = if artists.is_empty() {
+                    detail.album_artist.clone()
+                } else {
+                    artists.join(";")
+                };
+                if same_credit(&detail_credit, &credit, &aliases)
                     && same(&detail.album, &album)
                     && country_matches(&detail.country, &iso)
                 {
@@ -359,7 +477,15 @@ impl Lookup {
                         "  Discogs [{artist} - {album}]: selected {} (catalog {})",
                         detail.id, detail.catalog
                     );
-                    return Ok(Some(selected(&detail, &artist, &album, &iso)));
+                    let mut found = selected(&detail, &artist, &album, &iso);
+                    found.performers = album_credits(&body, &["Performer"]);
+                    found.composers = album_credits(&body, &["Composer", "Composed By"]);
+                    found.conductors = album_credits(&body, &["Conductor", "Conducted By"]);
+                    found.evidence["performer_credits"] = json!(found.performers);
+                    found.evidence["composer_credits"] = json!(found.composers);
+                    found.evidence["conductor_credits"] = json!(found.conductors);
+                    found.evidence["matched_artists"] = json!(artists);
+                    return Ok(Some(found));
                 } else {
                     eprintln!(
                         "  Discogs [{artist} - {album}]: reject detail {}: artist={:?}, title={:?}, country={:?} (expected {iso})",
@@ -379,6 +505,9 @@ fn selected(detail: &vcw_metadata::Release, artist: &str, album: &str, iso: &str
         catalog: catalog.clone(),
         genres: genres.clone(),
         ids: ids.clone(),
+        performers: Vec::new(),
+        composers: Vec::new(),
+        conductors: Vec::new(),
         evidence: json!({"provider":"discogs","kind":"release-match","release_ids":ids,
             "artist":artist,"album":album,"country_iso":iso,"catalog":catalog,"genres":genres,
             "selection_policy":"first-eligible-in-provider-order","genre_policy":"selected-release",
@@ -406,6 +535,20 @@ pub(super) fn apply(release: &Release, tracks: &mut [Track], found: &Match) -> R
             && let Some(cat) = &found.catalog
         {
             track.tags.insert("CATALOGNUMBER".into(), vec![cat.clone()]);
+        }
+        for (tag, credits) in [
+            ("PERFORMER", &found.performers),
+            ("COMPOSER", &found.composers),
+            ("CONDUCTOR", &found.conductors),
+        ] {
+            if !credits.is_empty() {
+                let names = track.tags.entry(tag.into()).or_default();
+                for name in credits {
+                    if !names.iter().any(|old| same_artist(old, name)) {
+                        names.push(name.clone());
+                    }
+                }
+            }
         }
         track.tags.insert("DISCOGSID".into(), found.ids.clone());
         track.tags.insert(
@@ -443,7 +586,11 @@ mod tests {
             self.calls.lock().unwrap().push(request.url.clone());
             let body = if request.url.contains("/database/search?") {
                 assert!(!request.url.to_ascii_lowercase().contains("remaster"));
-                json!({"results":self.details.iter().map(|detail| json!({"id":detail["id"],"title":"Romy - Proof","country":detail["country"]})).collect::<Vec<_>>()})
+                json!({"results":self.details.iter().map(|detail| {
+                    let artist = detail["artists"].as_array().unwrap().iter()
+                        .filter_map(|artist| artist["name"].as_str()).collect::<Vec<_>>().join(", ");
+                    json!({"id":detail["id"],"title":format!("{artist} - {}",detail["title"].as_str().unwrap()),"country":detail["country"]})
+                }).collect::<Vec<_>>()})
             } else {
                 self.details
                     .iter()
@@ -466,16 +613,142 @@ mod tests {
             details,
             calls: Mutex::new(Vec::new()),
         });
+        let clock = Arc::new(vcw_metadata::policy::TestClock::new());
+        let cache = Arc::new(vcw_metadata::cache::Memory::new(clock.clone()));
         let client = Client::new(ProviderId::Discogs, transport.clone())
-            .with_clock(Arc::new(vcw_metadata::policy::TestClock::new()));
+            .with_clock(clock)
+            .with_cache(cache.clone());
         Lookup {
             provider: Discogs::new(transport)
                 .with_client(client)
                 .with_genres(vcw_metadata::Genres::empty())
                 .with_token(Token::new("fixture-token")),
+            cache,
             cancel: Cancel::new(),
         }
     }
+    #[test]
+    fn joint_release_credits_match_separators_and_import_explicit_album_performers() {
+        for artists in [
+            json!([{"name":"Actress"},{"name":"Suzanne Ciani"}]),
+            json!([{"name":"Actress And Suzanne Ciani"}]),
+            json!([{"name":"Suzanne Ciani & Actress*"}]),
+        ] {
+            let (mut source, mut tracks) = source();
+            source.artist = "Actress, Suzanne Ciani".into();
+            source.album = "Concrète Waves".into();
+            tracks[0].tags.insert(
+                "ALBUMARTIST".into(),
+                vec!["Actress".into(), "Suzanne Ciani".into()],
+            );
+            tracks[0]
+                .tags
+                .insert("ALBUM".into(), vec![source.album.clone()]);
+            tracks[0].tags.insert(
+                "PERFORMER".into(),
+                vec!["Actress".into(), "Suzanne Ciani".into()],
+            );
+            tracks[0]
+                .tags
+                .insert("COMPOSER".into(), vec!["Original Composer".into()]);
+            tracks[0]
+                .tags
+                .insert("CONDUCTOR".into(), vec!["Original Conductor".into()]);
+            let mut release = detail(37768977, "CAT21", json!(["Ambient"]));
+            release["title"] = json!("Concrète Waves");
+            release["artists"] = artists;
+            let vinyl = release["artists"].as_array().unwrap().len() == 2;
+            release["formats"] = if vinyl {
+                json!([{"name":"Vinyl","qty":"2","descriptions":["LP"]}])
+            } else {
+                json!([{"name":"File","qty":"21","descriptions":["MP3"]}])
+            };
+            release["tracklist"] = if vinyl {
+                json!([{"position":"A","title":"Side A"},{"position":"B","title":"Side B"},
+                    {"position":"C","title":"Side C"},{"position":"D","title":"Side D"}])
+            } else {
+                json!(
+                    (1..=21)
+                        .map(|n| json!({"position":n.to_string(),"title":format!("Track {n}")}))
+                        .collect::<Vec<_>>()
+                )
+            };
+            release["extraartists"] = json!([
+                {"name":"Actress","anv":"Darren J. Cunningham","role":"Performer [Electronics]","tracks":""},
+                {"name":"Darren J. Cunningham","role":"Performer","tracks":""},
+                {"name":"Producer Only","role":"Producer","tracks":""},
+                {"name":"Suzanne Ciani","role":"Composed By","tracks":""},
+                {"name":"Suzanne Ciani","role":"Composer","tracks":""},
+                {"name":"Actress","anv":"Darren J. Cunningham","role":"Composed-By","tracks":""},
+                {"name":"Side A Only","role":"Performer","tracks":"A"},
+                {"name":"Canonical Conductor","anv":"Guest Conductor","role":"Conductor","tracks":""},
+                {"name":"Guest Conductor","role":"Conducted-By","tracks":""},
+                {"name":"Side B Conductor","role":"Conductor","tracks":"B"}
+            ]);
+            let found = lookup(vec![release])
+                .find(&source, &tracks)
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.performers, ["Darren J. Cunningham"]);
+            assert_eq!(found.composers, ["Suzanne Ciani", "Darren J. Cunningham"]);
+            assert_eq!(found.conductors, ["Guest Conductor"]);
+            let before = tracks[0].tags["ALBUMARTIST"].clone();
+            apply(&source, &mut tracks, &found);
+            assert_eq!(tracks[0].tags["ALBUMARTIST"], before);
+            assert_eq!(
+                tracks[0].tags["PERFORMER"],
+                ["Actress", "Suzanne Ciani", "Darren J. Cunningham"]
+            );
+            assert_eq!(
+                tracks[0].tags["COMPOSER"],
+                ["Original Composer", "Suzanne Ciani", "Darren J. Cunningham"]
+            );
+            assert_eq!(
+                tracks[0].tags["CONDUCTOR"],
+                ["Original Conductor", "Guest Conductor"]
+            );
+            assert_eq!(
+                found.evidence["conductor_credits"],
+                json!(["Guest Conductor"])
+            );
+            assert_eq!(
+                found.evidence["composer_credits"],
+                json!(["Suzanne Ciani", "Darren J. Cunningham"])
+            );
+            assert_eq!(
+                found.evidence["performer_credits"],
+                json!(["Darren J. Cunningham"])
+            );
+        }
+        let expected = "Actress, Suzanne Ciani";
+        let aliases = artist_aliases("Actress");
+        for actual in [
+            "Actress",
+            "Suzanne Ciani",
+            "Darren J. Cunningham",
+            "Actress And Someone Else",
+            "Actress, Suzanne Ciani, Someone Else",
+        ] {
+            assert!(!same_credit(actual, expected, &aliases), "{actual}");
+        }
+        assert!(same_credit("ACTRESS and SUZANNE CIANI", expected, &aliases));
+        assert!(same_credit(
+            "Osees*",
+            "Osees / The Oh Sees / Thee Oh Sees / Oh Sees",
+            &artist_aliases("Osees")
+        ));
+        assert!(same_credit(
+            "Earth, Wind & Fire",
+            "Earth, Wind & Fire",
+            &artist_aliases("Earth, Wind & Fire")
+        ));
+        assert!(!same_credit(
+            "Osees, Actress, Someone Else",
+            "Osees, Thee Oh Sees, Actress",
+            &artist_aliases("Osees")
+        ));
+    }
+
     #[test]
     fn edition_notes_are_search_only_and_require_a_year() {
         let mclusky = "My Pain And Sadness Is More Sad And Painful Than Yours";
@@ -697,12 +970,16 @@ mod tests {
                 starred,
                 searches: Default::default(),
             });
+            let clock = Arc::new(vcw_metadata::policy::TestClock::new());
+            let cache = Arc::new(vcw_metadata::cache::Memory::new(clock.clone()));
             let client = Client::new(ProviderId::Discogs, transport.clone())
-                .with_clock(Arc::new(vcw_metadata::policy::TestClock::new()));
+                .with_clock(clock)
+                .with_cache(cache.clone());
             let lookup = Lookup {
                 provider: Discogs::new(transport.clone())
                     .with_client(client)
                     .with_token(Token::new("fixture-token")),
+                cache,
                 cancel: Cancel::new(),
             };
             let (mut source, mut tracks) = source();

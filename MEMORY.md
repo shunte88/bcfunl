@@ -8,7 +8,7 @@ this session has no general reminder/scheduling tool.
 # Project Memory
 
 Updated: 2026-11-04
-Current release: v0.1.41 (native checks passed; container gate pending). Latest native media implementation details are in the final handoff entry.
+Current release: v0.1.43 (joint credits and performer/composer/conductor enrichment; container gate pending). Latest native media implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -2593,3 +2593,87 @@ built2026-11-04T05:13:41Z. Build workflow regression checks passed. Actual share
 readiness script attempted and blocked at Docker preflight: session cannot access
 Docker daemon or sudo. Container gate NOT green for .41; host must run
 sh scripts/check-build.sh before push/deployment. No agent commit/push/deploy.
+
+## NAS v0.1.41 with Discogs enabled: latest log review
+
+Read /mnt/backup/bcfunl-acquire4-cron.log and process4-cron.log on Nov4. Logs
+append prior .40 failures; isolate latest .41 block beginning line257. Latest
+process run successful:10attempted,2published,21skipped,0failed,wall194.051s.
+Eight existing releases verified in this attempted batch plus13 earlier-history
+skips. Karassimeon, Fluke Second Bite Remixes and Oh Sees Face Stabber now
+verify/skip on NAS, confirming the legacy-title fix. Zheng also now verifies;
+log alone does not establish what happened to the previously damaged file.
+A Saint Abdullah/Eomac alternate candidate has one audio mismatch but another
+candidate verified and release skipped, not a processing failure. No cleanup
+or SQLite corruption errors shown in the latest block.
+
+Discogs credentials now work: selected Fluke38310132 (catalognone), Martyn
+37388619 (3024MAR2LP), Oh Sees14055018 (CF-116), Actress38460711 (ZENDNL322).
+Remaining metadata gap: Concrète Waves joint credits Actress And Suzanne Ciani
+and Actress, Suzanne Ciani rejected against primary artist Actress. User earlier
+closed metadata refinement; no new matching expansion made from log review.
+Published Future City Punks Take My Breath Away and Actress Concrète Waves.
+Latest acquisition:9downloads succeeded, Eve Maret Live At The Reading Room
+rejected for future publication date; exact date not independently verified.
+No code change needed for this review. NAS image .41 and small-batch processing
+success observed from user logs; full host .41 check-build command not separately
+observed. Retain no-clean test posture until user approves wider run.
+
+## v0.1.42: joint Discogs credits and explicit performer/composer enrichment
+
+User explained Concrète Waves is credited Actress, Suzanne Ciani on double
+vinyl (A-D) and Actress And Suzanne Ciani on digital21tracks; Darren J.
+Cunningham is a displayed performer credit/Actress real name. User clarified
+this reference is for additional PERFORMER import, then explicitly requested
+COMPOSER too. No artist real-name alias is inferred from performer credits.
+
+Lookup now keeps all source ALBUMARTIST values for identity (including repeated
+fields), compares complete joint credits across separators/case/order/trailing
+stars, and checks full fetched release artist arrays instead of only provider's
+first artist. Unique one-to-one member matching through confirmed reciprocal
+aliases required: partial/extra/unrelated artists rejected. Existing Osees alias
+group and mapped literal Earth, Wind & Fire remain supported. Query primary
+artist/naming behavior remains, no format/track-count restriction added.
+
+VCW provider currently drops extraartists and all but first release artist.
+Without modifying sibling or making extra requests, bcfunl retains the same
+cache Arc used by its provider Client and parses the already cached selected
+release body. Supplement full artist validation and explicit extraartist roles.
+Album-wide Performer credits append/deduplicate PERFORMER; Composer and
+Composed By/Composed-By append COMPOSER. Displayed ANV preferred when present,
+otherwise name. Existing values retained, no substitution of album artist.
+Track-scoped credits excluded because physical side/digital track mapping is
+not proven. Producer-only/other roles not guessed as performer or composer.
+Credits included in existing discogs_metadata/genre-source provenance. Existing
+verified publications still skip without retagging, so new metadata acceptance
+needs a fresh destination. Original live music/history/archives untouched.
+
+140 automated tests passed,0failed,5ignored. Synthetic end-to-end provider
+fixtures cover two-artist array, And/& variants and reversal, case/asterisks,
+repeated source ALBUMARTIST, physical2LP A-D and21fileMP3 releases, explicit
+performer/composer roles, ANV, deduplication, existing-credit preservation and
+track-scoped/unrelated exclusions. Prior genre/country/title/audio guard tests
+pass. Locked strict Clippy, fmt, locked release build, workflow gate regression
+checks and diff whitespace passed. Binary v0.1.42 built2026-11-04T06:22:09Z.
+Actual sh scripts/check-build.sh attempted and BLOCKED at Docker preflight due
+to session socket/sudo restrictions; full .42 image readiness not claimed.
+Host command remains sh scripts/check-build.sh before deployment. No live
+Discogs API acceptance of these actual two release details performed here;
+source cached searches and source FLAC metadata were inspected read-only.
+No agent commit/push/deploy or sibling code changes.
+
+## v0.1.43: explicit conductor credits
+
+Stue requested conductor support for classical/orchestral collections. Reused
+the existing album-wide Discogs role extraction: Conductor and Conducted By
+(including hyphenated spelling) append/deduplicate CONDUCTOR, preserving prior
+values and displayed ANV. Added conductor provenance alongside performer and
+composer credits. No extra HTTP, dependency, sibling or naming changes.
+Track-scoped conductor credits remain excluded pending proven track mapping.
+Extended joint-credit fixture covers conductor ANV, duplicate role variants,
+existing credits and side-specific exclusion. 140 tests passed,0failed,5ignored;
+locked strict Clippy, fmt, optimized build, workflow regression tests and diff
+whitespace passed. Actual shared readiness script attempted and blocked by
+Docker daemon access; full .43 container gate remains pending host execution.
+Cargo.toml and Cargo.lock bumped together to0.1.43. No production file writes,
+commit, push, deployment or live classical-release acceptance performed.
