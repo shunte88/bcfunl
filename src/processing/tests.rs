@@ -1504,12 +1504,12 @@ fn existing_scan_ignores_unrelated_temporary_folders_but_keeps_real_duplicate_re
         fs::create_dir_all(&folder).unwrap();
         fs::copy(&tracks[0].path, folder.join("01.flac")).unwrap();
     }
-    assert!(
-        existing(root.path(), &plan, &tracks)
-            .unwrap_err()
-            .to_string()
-            .contains("Multiple verified server copies")
-    );
+    let error = existing(root.path(), &plan, &tracks)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Multiple verified server copies"));
+    assert!(error.contains("Proof [GB] [CAT01]"));
+    assert!(error.contains("Proof [US] [OLD01]"));
 }
 
 #[test]

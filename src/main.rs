@@ -52,7 +52,7 @@ enum VariousTag {
     Label,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(
     version = concat!("v", env!("CARGO_PKG_VERSION"), " (built ", env!("BCFUNL_BUILD_DATE"), ")"),
     about = "Download and process a Bandcamp collection with SQLite history"

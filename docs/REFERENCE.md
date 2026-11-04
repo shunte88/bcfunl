@@ -978,3 +978,47 @@ values are preserved. LABEL remains label metadata. Existing embedded labels
 take precedence over Discogs; conflicting embedded labels require review when
 using `{label}`. Existing server files are never moved or retagged automatically.
 Use a fresh destination to inspect the changed grouping.
+
+Discogs title lookup and comparison ignore grouping parentheses and square
+brackets while retaining their words. For example, `Title (Remixes Vol. 1)`
+matches `Title Remixes Vol. 1`; volume numbers and words such as Remixes or Live
+remain required. Source titles and written display tags retain their grouping punctuation.
+
+Title comparison treats `Vol.`, `Vol`, and `Volume` as equivalent immediately
+before a numeric volume identifier. Volume numbers remain significant. This
+comparison-only rule preserves query spelling, source tags and display names.
+
+
+### CRC recovery and parked payloads
+
+On a ZIP CRC checksum failure, processing preserves the failed archive in a
+unique `.parked-no-burn-*` directory beside the payload before attempting one
+complete fresh acquisition. It uses the stored download page and format with
+a fresh HTTP stream, without resuming or overwriting any existing file. Captured
+release metadata is retained. Other extraction errors do not trigger this retry.
+
+The retry allowance is persisted before network access. A second CRC failure
+parks the replacement too. Failed acquisition, interruption, or offline mode
+leaves the release parked for manual review. Parked releases are excluded from
+both acquisition and processing, including `--force`, so scheduled jobs can
+continue with other releases. A valid replacement resumes normal processing;
+other processing failures retain the replacement for the usual processing retry.
+
+SQLite automatically adds `releases.parked`, `releases.crc_reacquired`, and the
+`parked_payloads` evidence ledger. Every ledger entry has `no_burn=1`; `--clean`
+protects these paths even after a replacement publishes successfully. Disk use
+includes all parked copies until the operator reviews them. The no-burn flag
+protects against this application's cleanup, not external deletion commands.
+
+Inspect parked evidence without changing it:
+
+```sh
+sqlite3 downloads/collection.sqlite3 \
+  "SELECT item_key,path,parked_date,reason,no_burn FROM parked_payloads WHERE user='johnsmith';"
+sqlite3 downloads/collection.sqlite3 \
+  "SELECT item_key,parked,crc_reacquired,process_error FROM releases WHERE parked=1;"
+```
+
+There is no automatic reset or third acquisition. Review the evidence and the
+error before deliberately restoring a valid source and clearing the release's
+`parked` flag. Keep the evidence ledger and its `no_burn` protection intact.

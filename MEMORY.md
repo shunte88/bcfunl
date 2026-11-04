@@ -8,7 +8,7 @@ this session has no general reminder/scheduling tool.
 # Project Memory
 
 Updated: 2026-11-04
-Current release: v0.1.46 (--varioustag compilation grouping; container gate pending). Latest native media implementation details are in the final handoff entry.
+Current release: v0.1.48 (Vol./Volume comparison added; container gate pending). Latest native media implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -2765,3 +2765,116 @@ whitespace checks passed. Binary v0.1.46 built2026-11-04T07:37:50Z. Actual
 readiness script attempted but blocked at Docker preflight in this session.
 Host must run sh scripts/check-build.sh; full container readiness not claimed.
 No agent commit/push/deploy or production data writes.
+
+## v0.1.47: grouping punctuation in titles and queued NAS log review
+
+Stue reports three short acquire/process sets queued/running and requests log
+review; David Holmes Remixes Vol1 rejected solely for parentheses. Read latest
+/mnt/backup/bcfunl-*4-cron.log (append logs). Fixed lookup_title shared by query
+and title comparisons to replace grouping parentheses/brackets with spaces,
+keeping all enclosed words/numbers. Display tags untouched. Vol1/2/3 now match
+with/without grouping. YeahX3 vs YeahX3 Remixes and Necessary Genius vs its
+Remixes remain distinct; no fuzzy/word-removal relaxation. Artist/country
+checks unchanged. Added full lookup cases for three volumes and negative
+volume/word/empty-title distinctions. Version .47 Cargo/lock together.
+
+Latest .46 logs have REAL separate issues: multiple verified David Holmes
+Vol1 server folders (with/without [GB]); refuse overwrite/cleanup. Added both
+paths to duplicate-copy error, regression checks both paths. Liber Eleven
+album129740024 ZIP CRC fails at different first members across native parallel
+runs. Independent read-only 7z t on exact bcstag4 ZIP also FAILS CRC on track07
+Greedy Gutter Guru Remixed By Richard H Kirk (exit2). This is not merely a Rust
+reader assertion. Framewerk album1324801722 existing NAS track03 Hand In Hand
+(Framewerk Rewerk) fails independent flac -t with frame CRC/lost sync (exit1).
+Track19 Out Of Time had native incomplete-frame errors in an earlier run but
+independent flac -t NOW PASSES (exit0); do not claim all errors permanent or
+the cause established. Keep suspect source/archive and existing files, cleanup
+off. No running/queued jobs stopped or deployments/config changes made by
+agent. Recommend no image change midqueue and investigate integrity before
+scaling batch volume. Eve Maret still future-date blocked in acquisition,
+expected guard; exact publication date not independently checked.
+
+146 automated tests passed,0failed,5ignored. Fmt, locked strict Clippy, locked
+optimized build, workflow regression and whitespace checks passed. Binary
+v0.1.47 built2026-11-04T10:19:19Z. Actual check-build.sh attempted and Docker
+preflight blocked in this session; host image gate pending. No live Discogs
+API acceptance or NAS audio/DB/ZIP writes. Docs/tag rules and this handoff saved.
+
+## v0.1.48: volume abbreviation matching and ZIP/history verification
+
+Stue reports weekly usage only15% remaining; keep work/replies focused. User
+will scrub legacy tags/duplicates, asks verify ZIP implementation and earlier
+errors, and whether Vol./Volume match. Verified zip-rs/zip2 zip9.3 + flate2
+1.1.10 rust_backend (miniz_oxide), shared bounded pool and independent readers.
+Correct maintained crate, but NOT claiming fastest measured backend: official
+flate2 docs recommend zlib-rs + runtime_detection for maximum Rust performance
+(at cost of internal unsafe). No backend/dependency tuning performed or native
+production C dependency added. Leave such optimization to measured follow-up.
+
+Found actual PRE-migration /mnt/backup/bcfunl-process-cron.log starts v0.1.28.
+Line1932: Pop Ambient2026 7z CRC Failed on Micå New Drop. Lines2026/2033/2036:
+7z errno5 Input/output error (Black Dog My Brutal Life, Kid Spatula Joozy,
+Propaganda Remix Encounters). Earlier FFmpeg invalid subframe padding, residual
+coding etc too. Integrity error class predates Rust ZIP (.40), not proof of root
+cause. Earlier independent 7z failure on current Liber Eleven remains evidence.
+
+Vol./Volume previously differed. Added comparison-only normalization of Vol.,
+Vol, Volume (case-insensitive) immediately before a numeric identifier; words
+and volume numbers preserved. Query spelling, source/display titles unchanged.
+Tests across volumes1-3 and all4 marker cases, wrong-volume and nonnumeric
+Volume Control negatives. Existing grouping punctuation/year-edition rules
+retained. Cargo/lock version0.1.48.146 tests passed,0failed,5ignored; strict
+locked Clippy, fmt, locked optimized build, workflow regression, diff checks
+passed. Actual readiness script attempted, blocked at Docker preflight; host
+container gate and live match acceptance pending. No queued job disruption,
+NAS data writes, commit/push/deploy. Reference/tag rules and handoff updated.
+
+
+## 2026-11-04: v0.1.49 CRC recovery and no-burn parking
+
+Stue requested one complete re-acquisition after a ZIP CRC failure, preserving
+failed payloads for review and protecting them from cleanup. Implemented in
+src/processing/recovery.rs, called by the processing coordinator after a worker
+returns the typed archive::CrcFailure. zip9 exposes its CRC failure as exact
+InvalidData/"Invalid checksum"; only that error is classified. Unsafe paths,
+unsupported archives, I/O errors and audio validation failures do not trigger
+this ZIP recovery. Original ZIP worker path context remains in the error.
+
+Automatic SQLite migrations add releases.parked and crc_reacquired (default0),
+and parked_payloads(path,user,item_key,parked_date,reason,no_burn=1). Before any
+new acquisition, set parked=1 and record protection, then preserve the failed
+file via create-new hard link in a unique sibling .parked-no-burn-* directory,
+sync, unlink the old name, and sync the parent. Failure/interruption leaves the
+release excluded for manual review; files are never intentionally discarded.
+
+Persist crc_reacquired=1 before network I/O. Reuse download::fetch with the
+stored download page and format, fresh HTTP stream, force=false, no resume or
+existing-file overwrite. Already captured public release metadata is retained,
+so private/deleted public pages do not block recovery. This exceptional recovery
+uses the existing Rust streaming downloader, not aria2 resume. SQLite stays as
+is. Coordinator owns database/network recovery; other active workers continue.
+
+Successful replacement updates the history source path and retries processing.
+A second CRC failure parks that payload too, permanently exhausting automatic
+re-acquisition. Failed acquisition, offline mode or cancellation keeps parked=1;
+no automatic loop on later cron runs. A valid replacement with another processing
+error is retained for normal processing retries. Parked releases are excluded
+from process/clean selection and acquisition even with --force. No reset command
+was added. Review evidence/errors before deliberately restoring a valid source
+and clearing the release parked flag; do not erase the no-burn ledger.
+
+Cleanup checks ledger paths both literally and canonically and cannot burn parked
+evidence even after a successful replacement. Retried successful payloads remain
+eligible for normal verified cleanup. No-burn protects application cleanup only,
+not external shell deletion; evidence consumes disk space until reviewed.
+README/reference include behavior and read-only review queries using johnsmith.
+
+Validation: 149 passed,0failed,5ignored; locked strict Clippy, fmt, optimized build,
+workflow regression and diff checks passed. Actual scripts/check-build.sh attempted:
+Docker daemon unavailable in agent session, so container/package readiness remains
+blocked for host verification. Live authenticated Bandcamp/NAS re-acquisition not
+exercised. Focused tests inject fresh acquisition, cover preserved bytes, second
+CRC durability across reopening SQLite, force exclusion, offline/network failure
+parking and cleanup no-burn rejection. Existing real ZIP corruption test confirms
+typed classification. No NAS payload/database changes, commit, push or deployment.
+User requested memory/status and a break due to low remaining weekly usage.

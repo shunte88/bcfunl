@@ -294,3 +294,12 @@ must not be inserted into missing track credits or used to suppress a legitimate
 genre merely because it matches an album title. Missing label falls back to
 Various Artists; use embedded LABEL, confirmed Discogs label, or validated
 label-storefront evidence. Do not guess a label from an arbitrary artist.
+
+Discogs title lookup and comparison ignore grouping parentheses and square
+brackets while retaining their words. For example, `Title (Remixes Vol. 1)`
+matches `Title Remixes Vol. 1`; volume numbers and words such as Remixes or Live
+remain required. Source titles and written display tags retain their grouping punctuation.
+
+Title comparison treats `Vol.`, `Vol`, and `Volume` as equivalent immediately
+before a numeric volume identifier. Volume numbers remain significant. This
+comparison-only rule preserves query spelling, source tags and display names.

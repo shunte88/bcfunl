@@ -101,6 +101,8 @@ impl Database {
             ("process_date", "TEXT"),
             ("process_error", "TEXT"),
             ("processed_path", "TEXT"),
+            ("crc_reacquired", "INTEGER NOT NULL DEFAULT 0"),
+            ("parked", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             if !columns.iter().any(|row| row[1].as_deref() == Some(name)) {
                 db.query(
@@ -117,6 +119,7 @@ impl Database {
             let (title, catalog) = crate::sanitizing::title(get(3), get(2));
             db.query("UPDATE releases SET artist=?,sanitized_title=?,catalog_num=COALESCE(NULLIF(CASE WHEN lower(trim(catalog_num))='none' THEN '' ELSE catalog_num END,''),NULLIF(?,'')) WHERE user=? AND item_key=?", &[&crate::sanitizing::artist_display(get(2)),&title,catalog.as_deref().unwrap_or_default(),get(0),get(1)])?;
         }
+        db.query("CREATE TABLE IF NOT EXISTS parked_payloads (path TEXT PRIMARY KEY,user TEXT NOT NULL,item_key TEXT NOT NULL,parked_date TEXT NOT NULL,reason TEXT NOT NULL,no_burn INTEGER NOT NULL DEFAULT 1 CHECK(no_burn=1))", &[])?;
         db.query("COMMIT", &[])?;
         Ok(db)
     }
@@ -187,7 +190,7 @@ impl Database {
         Ok(rows)
     }
     pub fn completed(&self, user: &str, key: &str, force: bool) -> Result<bool> {
-        Ok(!force && !self.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND download_date IS NOT NULL", &[user,key])?.is_empty())
+        Ok(!self.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND (parked=1 OR (download_date IS NOT NULL AND ?='0'))", &[user,key,if force { "1" } else { "0" }])?.is_empty())
     }
     pub fn dump(&self, out: &mut impl std::io::Write, scope: Option<(&str, &str)>) -> Result<()> {
         let select = "SELECT artist,COALESCE(sanitized_title,release_title),download_date,attempts,CASE WHEN last_error IS NULL AND download_date IS NOT NULL THEN 'success' ELSE last_error END FROM releases";

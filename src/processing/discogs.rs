@@ -206,8 +206,30 @@ fn search_title(raw: &str) -> String {
     title.to_owned()
 }
 
+fn lookup_title(value: &str) -> String {
+    search_title(value)
+        .replace(['(', ')', '[', ']'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 fn same(a: &str, b: &str) -> bool {
-    !super::key(a).is_empty() && super::key(&search_title(a)) == super::key(&search_title(b))
+    let identity = |value: &str| {
+        let title = lookup_title(value);
+        let mut words: Vec<_> = title.split_whitespace().collect();
+        for i in 0..words.len().saturating_sub(1) {
+            if ["vol.", "vol", "volume"]
+                .iter()
+                .any(|marker| words[i].eq_ignore_ascii_case(marker))
+                && words[i + 1].chars().all(|c| c.is_ascii_digit())
+            {
+                words[i] = "volume";
+            }
+        }
+        super::key(&words.join(" "))
+    };
+    let a = identity(a);
+    !a.is_empty() && a == identity(b)
 }
 fn same_artist(a: &str, b: &str) -> bool {
     let clean = |name: &str| {
@@ -410,12 +432,18 @@ impl Lookup {
             );
         }
         let aliases = artist_aliases(&artist);
+        let query_album = lookup_title(&album);
         let mut queries: Vec<_> = aliases
             .iter()
-            .map(|alias| Query::new().vinyl_only(false).artist(alias).album(&album))
+            .map(|alias| {
+                Query::new()
+                    .vinyl_only(false)
+                    .artist(alias)
+                    .album(&query_album)
+            })
             .collect();
         // Broaden retrieval only; artist/title/country validation remains mandatory.
-        queries.push(Query::new().vinyl_only(false).album(&album));
+        queries.push(Query::new().vinyl_only(false).album(&query_album));
         let mut ids = std::collections::HashSet::new();
         for query in queries {
             let candidates = self.provider.search(&query, &self.cancel)?;
@@ -643,6 +671,49 @@ mod tests {
             cancel: Cancel::new(),
         }
     }
+    #[test]
+    fn title_grouping_punctuation_does_not_change_identity_or_volume() {
+        for volume in [1, 2, 3] {
+            let source_title = format!("Blind On A Galloping Horse (Remixes Vol. {volume})");
+            let catalog_title = format!("Blind On A Galloping Horse Remixes Vol. {volume}");
+            assert!(same(&source_title, &catalog_title));
+            for marker in ["Vol.", "Vol", "Volume", "VOLUME"] {
+                assert!(same(&source_title, &catalog_title.replace("Vol.", marker)));
+            }
+            assert!(same(
+                &source_title,
+                &source_title.replace('(', "[").replace(')', "]")
+            ));
+            let (mut source, mut tracks) = source();
+            source.album = source_title.clone();
+            tracks[0]
+                .tags
+                .insert("ALBUM".into(), vec![source_title.clone()]);
+            let before = tracks[0].tags.clone();
+            let mut detail = detail(30034996, "CAT1", json!(["Electronic"]));
+            detail["title"] = json!(catalog_title);
+            assert!(
+                lookup(vec![detail])
+                    .find(&source, &tracks)
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(tracks[0].tags, before);
+        }
+        for (a, b) in [
+            ("Title (Remixes Vol. 1)", "Title Remixes Vol. 2"),
+            ("Yeah X3", "Yeah X3 Remixes"),
+            ("Necessary Genius", "Necessary Genius Remixes"),
+            ("Title (Live)", "Title"),
+            ("Title*", "Title"),
+            ("Title Vol. 1", "Title Volume 2"),
+            ("Title Volume Control", "Title Vol. Control"),
+            ("()", "[]"),
+        ] {
+            assert!(!same(a, b), "{a} / {b}");
+        }
+    }
+
     #[test]
     fn confirmed_label_fills_missing_source_label_without_replacing_one() {
         let (source, mut tracks) = source();

@@ -106,6 +106,11 @@ manifest with its listed files still present. Failed or unverifiable releases
 are retained. History and published music remain intact. See the
 [cleanup rules](docs/REFERENCE.md#clean-processed-downloads) before enabling it.
 
+A ZIP CRC failure parks the failed archive as **no-burn** and triggers one full
+fresh download and processing retry. A second CRC failure parks the replacement
+for review. Cleanup never deletes parked evidence. Offline mode parks without
+downloading; see the [recovery rules](docs/REFERENCE.md#crc-recovery-and-parked-payloads).
+
 ### Schedule maintenance
 
 Place `bcfunl`, `data/`, private cookies, and `scripts/maintenance.sh` together

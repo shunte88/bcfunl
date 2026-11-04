@@ -22,6 +22,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 fn remove(db: &Database, args: &Args, input: &Path, row: &crate::db::Row) -> Result<bool> {
     let get = |i: usize| row[i].as_deref().unwrap_or_default();
     let source = Path::new(get(3));
+    ensure!(
+        db.query(
+            "SELECT 1 FROM parked_payloads WHERE path=? AND no_burn=1",
+            &[get(3)]
+        )?
+        .is_empty(),
+        "Parked no-burn payload; retain for review"
+    );
     match fs::symlink_metadata(source) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         result => {
@@ -36,6 +44,14 @@ fn remove(db: &Database, args: &Args, input: &Path, row: &crate::db::Row) -> Res
         );
     }
     let source = source.canonicalize()?;
+    ensure!(
+        db.query(
+            "SELECT 1 FROM parked_payloads WHERE path=? AND no_burn=1",
+            &[&source.to_string_lossy()]
+        )?
+        .is_empty(),
+        "Parked no-burn payload; retain for review"
+    );
     let user_root = input.join(&args.user);
     ensure!(
         source.starts_with(&user_root),
@@ -93,7 +109,7 @@ pub(super) fn completed(
         // Keep the success-status check stable until the payload removal finishes.
         db.query("BEGIN IMMEDIATE", &[])?;
         let result = (|| {
-            let current = db.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND file_path=? AND download_date IS NOT NULL AND last_error IS NULL AND process_date IS NOT NULL AND process_error IS NULL AND processed_path=?", &[&args.user,row[0].as_deref().unwrap_or_default(),row[3].as_deref().unwrap_or_default(),row[10].as_deref().unwrap_or_default()])?;
+            let current = db.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND file_path=? AND download_date IS NOT NULL AND last_error IS NULL AND process_date IS NOT NULL AND process_error IS NULL AND parked=0 AND processed_path=?", &[&args.user,row[0].as_deref().unwrap_or_default(),row[3].as_deref().unwrap_or_default(),row[10].as_deref().unwrap_or_default()])?;
             if current.is_empty() {
                 return Ok(false);
             }

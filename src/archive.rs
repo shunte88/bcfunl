@@ -10,6 +10,15 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[derive(Debug)]
+pub(crate) struct CrcFailure;
+impl std::fmt::Display for CrcFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ZIP CRC checksum failed")
+    }
+}
+impl std::error::Error for CrcFailure {}
+
 pub(crate) fn copy(mut input: impl Read, mut output: impl Write) -> Result<u64> {
     let mut buffer = [0; 128 * 1024];
     let mut total = 0;
@@ -173,6 +182,16 @@ pub(crate) fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>>
                         .open(&output)
                         .with_context(|| format!("Create extracted member {}", output.display()))?;
                     let copied = copy((&mut member).take(size + 1), &mut file)
+                        .map_err(|error| {
+                            // zip 9 exposes CRC failures as this exact io error, without a typed variant.
+                            if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                                e.kind() == std::io::ErrorKind::InvalidData
+                                    && e.to_string() == "Invalid checksum"
+                            }) {
+                                return anyhow::Error::new(CrcFailure);
+                            }
+                            error
+                        })
                         .with_context(|| format!("Extract ZIP member {}", path.display()))?;
                     ensure!(
                         copied == *size,
@@ -284,7 +303,7 @@ mod tests {
             .position(|b| b == b"unique audio bytes")
             .unwrap();
         bytes[offset] ^= 1;
-        assert!(run(&bytes).is_err());
+        assert!(run(&bytes).unwrap_err().is::<CrcFailure>());
         assert!(run(&bytes[..bytes.len() - 10]).is_err());
         assert!(run(b"not a zip").is_err());
         let mut duplicate = fixture(&[("one", b"a"), ("two", b"b")], CompressionMethod::Stored);

@@ -4,6 +4,7 @@ mod credits;
 mod decoding;
 mod discogs;
 mod genres;
+mod recovery;
 mod tagging;
 pub(crate) mod tempfile;
 mod template;
@@ -701,7 +702,7 @@ fn existing(server: &Path, plan: &Plan, source: &[Track]) -> Result<Option<PathB
             }
         }
     }
-    let mut matched = None;
+    let mut matched: Option<PathBuf> = None;
     let mut directories = HashSet::new();
     for candidate in candidates {
         ensure!(
@@ -722,10 +723,13 @@ fn existing(server: &Path, plan: &Plan, source: &[Track]) -> Result<Option<PathB
         }
         match matching_release(source, &candidate) {
             Ok(true) => {
-                ensure!(
-                    matched.is_none(),
-                    "Multiple verified server copies require review"
-                );
+                if let Some(previous) = &matched {
+                    bail!(
+                        "Multiple verified server copies require review: {} and {}",
+                        previous.display(),
+                        candidate.display()
+                    );
+                }
                 matched = Some(candidate);
             }
             Ok(false) if candidate == exact => bail!(
@@ -1180,7 +1184,7 @@ fn completed_here(path: &str, server: &Path, item_key: &str) -> bool {
 
 fn processing_rows(db: &Database, args: &Args) -> Result<Vec<crate::db::Row>> {
     let mut sql = String::from(
-        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),file_path,genre,country_iso,catalog_num,publish_date,release_url,process_date,processed_path,process_error FROM releases WHERE user=? AND download_date IS NOT NULL",
+        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),file_path,genre,country_iso,catalog_num,publish_date,release_url,process_date,processed_path,process_error FROM releases WHERE user=? AND download_date IS NOT NULL AND parked=0",
     );
     let mut values = vec![args.user.clone()];
     if let Some(artist) = &args.artist {
@@ -1275,6 +1279,28 @@ pub fn run(args: &Args) -> Result<()> {
                           result: Result<(PathBuf, Plan, bool)>,
                           skipped: &mut u32|
          -> Result<()> {
+            let result = match result {
+                Err(error)
+                    if error.is::<crate::archive::CrcFailure>() && !shutdown::requested() =>
+                {
+                    recovery::retry(&db, args, &input, release, |replacement| {
+                        let library = library_path
+                            .as_deref()
+                            .map(genres::Library::open)
+                            .transpose()?;
+                        process_one(
+                            replacement,
+                            &input,
+                            &server,
+                            &template,
+                            library.as_ref().filter(|_| args.offline),
+                            lookup.as_ref(),
+                            args,
+                        )
+                    })
+                }
+                result => result,
+            };
             match result {
                 Ok((path, plan, exists)) => {
                     db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback),discogs_metadata=NULLIF(?,'') WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&plan.discogs_metadata.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
