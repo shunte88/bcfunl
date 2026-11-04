@@ -7,8 +7,8 @@ this session has no general reminder/scheduling tool.
 
 # Project Memory
 
-Updated: 2026-11-02
-Current release: v0.1.39. Latest native media implementation details are in the final handoff entry.
+Updated: 2026-11-03
+Current release: v0.1.40. Latest native media implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -2383,3 +2383,81 @@ Publication blocked by session filesystem permissions: git add -u failed with
 metadata directory is read-only in this session. No commit or push occurred.
 Application files and memory/status remain saved. Resume commit/push from a
 session with writable Git metadata, or run the supplied host commands.
+
+## 2026-11-03: native archive/resource I/O implementation in progress
+
+Stue requested removal of external 7zip with shared concurrent Rust archive
+handling, and no runtime subprocesses other than aria2. Explicit follow-up:
+SQLite stays as is. No SQLite bindings/linkage changes were made. Previous
+accepted work is now committed by host as f8f9936.
+
+Working Cargo version is 0.1.40, NOT yet built or validated. Cargo.toml adds zip
+9.3 (only deflate-flate2 feature), flate2 with pure Rust backend. Existing sha2
+is reused. New src/archive.rs centralizes iterative sorted symlink-refusing
+walking, cancellation-aware 128 KiB copy, SHA-256, ZIP preflight and streaming
+parallel extraction. Reject unsafe paths, links/special files, raw/normalized
+duplicate names, file-directory collisions, nonempty destination, CRC/size
+errors. Limits 100k members, 64 GiB/member, 1 TiB total declared size. Stored and
+Deflate + ZIP64 supported; other compression/encrypted ZIPs fail retaining source.
+Uses chunks with independent File/ZipArchive per chunk, at most pool size chunks
+per release. No unsafe archive API. zip9.3 chosen because older8.6 hides raw
+duplicate names and lacks has_duplicate_names; new name API returns Result<Cow>.
+
+Shared existing bounded pool moved to src/workers.rs, reused by extraction and
+audio jobs. Processing no longer calls 7z. Command runner now cfg(test) only.
+Resources replace gzip child with MultiGzDecoder and sha256sum with native SHA.
+SQLite remains system-linked. Optional maintenance shell wrapper still needs
+flock; Docker retains util-linux and optional sqlite3 inspection tool. Removed
+explicit 7zip/gzip/coreutils dependencies from Docker/CI, updated runtime docs.
+
+Added archive tests for concurrent Stored/Deflate/ZIP64, Unicode/nested/empty
+files, traversal, symlinks, collisions, corruption/truncation, duplicate names,
+no overwrite and known SHA vector; processing ZIP fixture now native ZipWriter.
+Gzip test now native GzEncoder, concatenated members and truncated/corrupt CRC.
+None of the Rust changes have been compiled yet: sandbox DNS cannot resolve
+crates.io and ZIP/typed-path are not cached. User has an asynchronous request
+to run cd /data2/bcfunl && cargo fetch on host; Cargo.toml is ready. Cargo.lock
+still old until successful fetch. Do NOT report .40 as ready or gates green.
+
+Passed so far: cargo fmt --check, git diff --check, maintenance shell syntax,
+Python maintenance/migration checks, Docker Compose example validation.
+Next: after host fetch run cargo test --offline, fix API/test/compiler errors,
+Clippy -D warnings, release build, then /tmp/bcfunl-native-archive-smoke.py.
+Smoke creates TWO disposable Stored/Deflated ZIP releases, concurrent native
+publication+clean and gzip resource import with child PATH=/nonexistent. Script
+not run yet. Confirm real archive extraction optionally using read-only source
+and /tmp outputs. Update memory/status with final evidence. No live staged files,
+music, history or Docker deployments modified.
+
+## Native archive/resource I/O completed: v0.1.40
+
+Host fetched dependencies. Implementation now compiles and is ready for host
+acceptance. 138 tests passed, 0 failed, 4 ignored. Strict all-target offline
+Clippy, fmt, release build, diff whitespace, maintenance shell/Python checks,
+SQL path migration tests and Docker Compose example validation passed.
+Production thread import corrected after Clippy caught its accidental cfg(test)
+placement. No extraction or import logic fixes were needed after compilation.
+
+Binary: bcfunl v0.1.40 (built 2026-11-04T02:11:10Z), Nov3 local.
+PATH=/nonexistent end-to-end check passed: two disposable releases (Stored and
+Deflate ZIP, two FLAC tracks each) processed concurrently with --parallel 2,
+published, verified and cleaned. Native gzip artist/master import and hashes
+passed in the same environment. Smoke fixture initially put ZIPs outside the
+user staging subtree; cleanup correctly retained them. Fixed ONLY the temporary
+fixture paths under stage/johnsmith and repeated successfully. No production
+staging, music, cookies, history or snapshots changed. Test generator used host
+FFmpeg/Python to prepare fixtures; the tested executable had no tools on PATH.
+
+ldd confirms libsqlite3.so.0 is still dynamically linked, per Stue's explicit
+instruction. Archive code is zip9.3 + flate2 pure Rust backend; SHA-256 reuses
+sha2. No runtime 7z/gzip/sha256sum calls remain; other command helpers and audio
+fixture tools are cfg(test). Optional maintenance shell wrapper still uses
+flock, and Docker retains optional util-linux/sqlite3 admin utilities. Runtime
+image no longer explicitly installs 7zip/gzip/coreutils. SQLite unchanged.
+
+No NAS throughput benchmark, real purchased ZIP acceptance, Docker image build,
+commit/push or deployment performed. No purchased archives were available in
+the checked local staging roots; synthetic ZIP/ZIP64 and native pipeline fixtures
+provide local coverage. Existing no-overwrite/publication guards remain intact.
+Do not claim a measured NAS speedup. /tmp/bcfunl-native-archive-smoke.py available
+for rerun. User can now run their staged batch on the rebuilt executable.

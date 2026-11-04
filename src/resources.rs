@@ -10,7 +10,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -45,25 +44,7 @@ fn download_url(year: i32, name: &str) -> String {
         .append_pair("download", &format!("data/{year}/{name}"));
     url.into()
 }
-fn sha256(path: &Path) -> Result<String> {
-    shutdown::check()?;
-    let out = Command::new("sha256sum")
-        .arg("--")
-        .arg(path)
-        .output()
-        .context("Run sha256sum")?;
-    ensure!(out.status.success(), "sha256sum failed");
-    let digest = String::from_utf8(out.stdout)?
-        .split_whitespace()
-        .next()
-        .context("Missing SHA-256")?
-        .to_owned();
-    ensure!(
-        digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
-        "Invalid SHA-256"
-    );
-    Ok(digest)
-}
+use crate::archive::sha256;
 fn expected_checksum(text: &str, name: &str) -> Result<String> {
     text.lines()
         .find_map(|line| {
@@ -404,24 +385,9 @@ fn import_source(
         }
     };
     if n == 2 && magic == [0x1f, 0x8b] {
-        let mut child = crate::aria2::ChildGuard(
-            Command::new("gzip")
-                .args(["-cd", "--"])
-                .arg(path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .context("Start gzip")?,
-        );
-        let result = parse(Box::new(BufReader::new(
-            child.0.stdout.take().context("gzip stdout")?,
-        )))?;
-        ensure!(
-            child.0.wait()?.success(),
-            "Invalid or truncated gzip extract"
-        );
-        Ok(result)
+        parse(Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(
+            file,
+        ))))
     } else {
         parse(Box::new(BufReader::new(file)))
     }
@@ -630,18 +596,31 @@ mod tests {
             assert!(import(bad.as_bytes(), &db).is_err());
         }
         fs::write(&source, XML).unwrap();
-        let gzip = Command::new("gzip")
-            .arg("-c")
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert!(gzip.status.success());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(XML.as_bytes()).unwrap();
+        let gzip = encoder.finish().unwrap();
         let gz = root.path().join("artists.xml.gz");
-        fs::write(&gz, &gzip.stdout).unwrap();
+        fs::write(&gz, &gzip).unwrap();
         let db = Database::connect(":memory:").unwrap();
         schema(&db).unwrap();
         assert_eq!(import_source(&gz, &db, false).unwrap().0, 2);
-        let mut broken = gzip.stdout;
+        // Concatenated members must decode as one XML stream, with every trailer checked.
+        let mut concatenated = Vec::new();
+        for part in XML.as_bytes().chunks(XML.len().div_ceil(2)) {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(part).unwrap();
+            concatenated.extend(encoder.finish().unwrap());
+        }
+        fs::write(&gz, &concatenated).unwrap();
+        let db = Database::connect(":memory:").unwrap();
+        schema(&db).unwrap();
+        assert_eq!(import_source(&gz, &db, false).unwrap().0, 2);
+        fs::write(&gz, &gzip[..gzip.len() - 3]).unwrap();
+        let db = Database::connect(":memory:").unwrap();
+        schema(&db).unwrap();
+        assert!(import_source(&gz, &db, false).is_err());
+        let mut broken = gzip;
         let end = broken.len() - 5;
         broken[end] ^= 0xff;
         fs::write(&gz, broken).unwrap();

@@ -13,7 +13,7 @@ RUN cargo build --locked --release
 
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    aria2 7zip gzip coreutils util-linux libsqlite3-0 sqlite3 ca-certificates \
+    aria2 util-linux libsqlite3-0 sqlite3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /build/bcfunl/target/release/bcfunl ./bcfunl

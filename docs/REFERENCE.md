@@ -20,19 +20,16 @@ All runtime utilities must be available on PATH for the relevant mode:
 | Utility | Purpose | Required for |
 | --- | --- | --- |
 | `aria2c` | Parallel transfers | Download mode with `--parallel` |
-| `7z` | Validate and extract release archives | Processing ZIP archives |
-| `gzip` | Stream and validate compressed XML extracts | `--resources` with gzip input |
-| `sha256sum` | Verify resource checksums | `--resources` |
 
 Install the complete runtime utility set on Ubuntu/Debian:
 
 ```sh
 sudo apt update
-sudo apt install aria2 7zip gzip coreutils libsqlite3-0
+sudo apt install aria2 libsqlite3-0
 ```
 
-`coreutils` provides `sha256sum`. Older distributions may provide `7z` through
-`p7zip-full` instead of `7zip`.
+ZIP extraction, gzip resource decoding and SHA-256 checks run in Rust.
+The optional shell maintenance wrapper also needs `flock` from `util-linux`.
 
 Source builds additionally need Rust/Cargo, a system linker (provided by
 `build-essential`), `libsqlite3-dev`, and the sibling VCW checkout described
@@ -230,7 +227,7 @@ case-insensitive deduplication apply to all selected genres. The ALBUM tag inclu
 catalog suffixes. Cover images are retained, and an archive cover or embedded
 picture supplies `folder.jpg` or `folder.png` according to its actual format.
 
-Requirements: Linux or macOS and `7z` for ZIP archives. Native Rust libraries handle
+Requirements: Linux or macOS. Native Rust libraries handle
 metadata, artwork and audio decoding. FLAC, WAV, MP3, AIFF, ALAC/AAC in M4A, and
 Vorbis/Ogg retain their audio format. Lofty updates container metadata without
 audio transcoding. Every prepared track must preserve its decoded
@@ -516,7 +513,7 @@ an older month. Successful downloads are cached under the resource directory.
 The publisher's CHECKSUM manifest supplies SHA-256 digests.
 
 Imports stream individual XML records, including gzip input, without extracting
-the complete XML. Runtime tools `gzip` and `sha256sum` must be on PATH. A new
+the complete XML. Gzip CRC checks and SHA-256 verification run in Rust. A new
 database is built privately, indexed and checked before atomic replacement of
 the library. An importer lock prevents simultaneous rebuilds. On failure or
 SIGINT/SIGTERM, staged data is discarded and an existing library stays intact.
@@ -907,3 +904,13 @@ year order and re-issued/re-mastered spellings. Album tags and folder names
 retain the edition note. Remix, live, bonus-track, and unqualified year text
 remain significant. This matches a base title, not a specific pressing; the
 existing first eligible artist/title/country selection still applies.
+
+ZIP archives are validated before extraction: relative member paths only, no
+links or special files, duplicate names, file/directory collisions, or existing
+destination contents. Stored and Deflate ZIP members, including ZIP64, are
+streamed with CRC verification into a private temporary directory. Extraction
+and audio jobs share one bounded pool of at most eight workers across releases.
+Every copy checks cancellation between 128 KiB blocks. Limits are 100,000 members,
+64 GiB per member and 1 TiB total declared output. Unsupported compression or
+encrypted archives fail with their source retained. Directory walking is native,
+iterative, sorted and refuses symlinks.

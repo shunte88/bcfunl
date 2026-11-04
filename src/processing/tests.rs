@@ -143,17 +143,6 @@ fn other_download_containers_roundtrip_metadata_without_changing_audio() {
 }
 #[test]
 fn archive_members_and_publication_refuse_escape_links_and_overwrites() {
-    for listing in [
-        "Path = ../outside",
-        "Path = /absolute",
-        "Path = C:/windows",
-        "Path = link\nSymbolic Link = ../outside",
-        "Path = link\nAttributes = A lrwxrwxrwx",
-        "Path = x\n\nPath = x",
-    ] {
-        assert!(validate_listing(listing).is_err(), "{listing}");
-    }
-    validate_listing("Path = Disc 1/01 - Track.flac\nAttributes = A -rw-r--r--").unwrap();
     let dir = tempfile::tempdir().unwrap();
     let staging = dir.path().join("staging");
     let dest = dir.path().join("dest");
@@ -175,13 +164,14 @@ fn processing_zip_records_completion_and_skips_verified_server_audio() {
     let (_audio, path) = fixture("flac");
     tagging::write(&path, &sample()).unwrap();
     let archive = input.join("release.zip");
-    command(
-        Command::new("7z")
-            .args(["a", "-tzip", "--"])
-            .arg(&archive)
-            .arg(&path),
+    let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+    zip.start_file(
+        path.file_name().unwrap().to_str().unwrap(),
+        zip::write::SimpleFileOptions::default(),
     )
     .unwrap();
+    crate::archive::copy(File::open(&path).unwrap(), &mut zip).unwrap();
+    zip.finish().unwrap();
     let db = Database::open(input.join("collection.sqlite3").to_str().unwrap()).unwrap();
     db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,file_path,genre,country_iso) VALUES('fixture','album1','Romy','Proof','https://bandcamp.com/download','complete',?,'electronic;alternative','GB')",&[archive.to_str().unwrap()]).unwrap();
     drop(db);

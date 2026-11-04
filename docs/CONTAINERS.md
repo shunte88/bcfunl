@@ -10,8 +10,9 @@ existing music-library copies.
 
 Compose uses the prebuilt `ghcr.io/shunte88/bcfunl:latest` image. No local
 compilation, Rust installation, or sibling VCW checkout is required on the NAS.
-The final Linux image contains aria2c, 7z, gzip,
-sha256sum, flock, SQLite and CA certificates. Cookies, music, staging history,
+The final Linux image contains aria2c, SQLite and CA certificates, plus
+optional flock and sqlite3 utilities for maintenance and inspection. Archive
+extraction, gzip resource imports and checksum verification run in Rust. Cookies, music, staging history,
 and resource databases are not baked into the image.
 
 ```sh

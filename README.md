@@ -129,19 +129,21 @@ the sibling VCW source checkout at runtime.
 | Utility | Used for |
 | --- | --- |
 | `aria2c` | Parallel downloads |
-| `7z` | Processing ZIP archives |
-| `gzip`, `sha256sum` | Discogs resource imports and checksum verification |
 | `flock` | Scheduled maintenance wrapper |
 
 On Ubuntu/Debian, install the complete runtime set:
 
 ```sh
 sudo apt update
-sudo apt install aria2 7zip gzip coreutils util-linux libsqlite3-0
+sudo apt install aria2 libsqlite3-0
+# Optional scheduled maintenance wrapper:
+sudo apt install util-linux
 ```
 
 Audio inspection, tagging, artwork reads, and PCM verification run in Rust using
-Lofty and Symphonia. Older distributions may provide `7z` through `p7zip-full`. The `sqlite3` command is optional for manual
+Lofty and Symphonia. ZIP extraction, directory walking, gzip decoding and SHA-256
+verification also run in Rust. Only aria2c is invoked by the executable. The
+optional shell maintenance wrapper uses flock. The `sqlite3` command is optional for manual
 queries; bcfunl links the SQLite library directly.
 
 For TrueNAS, use the [deployment guide](docs/TRUENAS.md). If the appliance lacks

@@ -8,24 +8,31 @@ mod tagging;
 pub(crate) mod tempfile;
 mod template;
 
-use crate::{Args, aria2::ChildGuard, db::Database, shutdown};
+#[cfg(test)]
+use crate::aria2::ChildGuard;
+use crate::{Args, db::Database, shutdown, workers::file_pool};
 use anyhow::{Context, Result, bail, ensure};
 use rayon::prelude::*;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::Read,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     thread,
+};
+#[cfg(test)]
+use std::{
+    io::Read,
+    process::{Command, Stdio},
 };
 type Tags = BTreeMap<String, Vec<String>>;
 
+#[cfg(test)]
 fn command(cmd: &mut Command) -> Result<String> {
     Ok(String::from_utf8(command_output(cmd)?)?)
 }
+#[cfg(test)]
 fn command_output(cmd: &mut Command) -> Result<Vec<u8>> {
     shutdown::check()?;
     let program = cmd.get_program().to_string_lossy().into_owned();
@@ -92,75 +99,7 @@ fn audio(path: &Path) -> bool {
         "flac" | "wav" | "mp3" | "aiff" | "aif" | "aifc" | "m4a" | "ogg"
     )
 }
-fn collect(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for entry in
-        fs::read_dir(root).with_context(|| format!("Read release directory {}", root.display()))?
-    {
-        shutdown::check()?;
-        let entry = entry?;
-        let kind = entry
-            .file_type()
-            .with_context(|| format!("Inspect release member {}", entry.path().display()))?;
-        ensure!(
-            !kind.is_symlink(),
-            "Symlink refused in release: {}",
-            entry.path().display()
-        );
-        if kind.is_dir() {
-            files.extend(collect(&entry.path())?);
-        } else {
-            ensure!(kind.is_file(), "Nonregular release member refused");
-            files.push(entry.path());
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-fn validate_listing(listing: &str) -> Result<()> {
-    let mut paths = HashSet::new();
-    for line in listing.lines() {
-        if let Some(path) = line.strip_prefix("Path = ") {
-            ensure!(
-                !path.is_empty()
-                    && !path.contains(['\\', '\0'])
-                    && !Path::new(path).is_absolute()
-                    && !path
-                        .split('/')
-                        .any(|part| part == ".." || part.contains(':')),
-                "Unsafe archive member"
-            );
-            ensure!(paths.insert(path), "Duplicate archive member");
-        }
-        ensure!(
-            !line.split_once(" = ").is_some_and(|(key, val)| matches!(
-                key,
-                "Symbolic Link" | "Hard Link" | "Copy Link"
-            ) && !val.trim().is_empty())
-                && !line
-                    .strip_prefix("Attributes = ")
-                    .is_some_and(|v| v.split_whitespace().any(|a| a.starts_with('l'))),
-            "Archive link refused"
-        );
-    }
-    Ok(())
-}
-fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
-    let listing = command(
-        Command::new("7z")
-            .args(["l", "-slt", "-ba", "--"])
-            .arg(source),
-    )?;
-    validate_listing(&listing)?;
-    command(
-        Command::new("7z")
-            .args(["x", "-y", "-p", "-snl-"])
-            .arg(format!("-o{}", destination.display()))
-            .arg("--")
-            .arg(source),
-    )?;
-    collect(destination)
-}
+use crate::archive::{collect, extract};
 fn retry_audio<T>(path: &Path, mut read: impl FnMut() -> Result<T>) -> Result<T> {
     match read() {
         Ok(value) => Ok(value),
@@ -201,24 +140,6 @@ struct Track {
     path: PathBuf,
     tags: Tags,
     duration: f64,
-}
-// A shared bounded pool prevents release-level parallelism multiplying track workers.
-fn file_pool() -> Result<&'static rayon::ThreadPool> {
-    static POOL: std::sync::OnceLock<std::result::Result<rayon::ThreadPool, String>> =
-        std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(1)
-                    .min(8),
-            )
-            .build()
-            .map_err(|e| e.to_string())
-    })
-    .as_ref()
-    .map_err(|e| anyhow::anyhow!("Create audio worker pool: {e}"))
 }
 fn tracks(paths: &[PathBuf]) -> Result<Vec<Track>> {
     let paths: Vec<_> = paths.iter().filter(|p| audio(p)).collect();

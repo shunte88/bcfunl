@@ -1,3 +1,4 @@
+mod archive;
 mod aria2;
 mod collection;
 mod db;
@@ -14,6 +15,7 @@ mod resources;
 mod sanitizing;
 mod shutdown;
 mod staging;
+mod workers;
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
