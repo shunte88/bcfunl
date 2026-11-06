@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-11-05 (America/New_York)
-Local release: **v0.1.51**, retries outside count, five-failure parking, and status grids; container gate pending
+Updated: 2026-11-06 (America/New_York)
+Local release: **v0.1.52**, database validation accepts legitimate package keys; container/NAS maintenance acceptance pending
 
 ## Current outcome
 
@@ -2539,3 +2539,40 @@ Binary v0.1.51 built2026-11-06T04:49:09Z (Nov5local). Actual check-build.sh atte
 blocked at Docker daemon preflight in agent session; full image/package and NAS
 acceptance remain host-side work. No new dependencies, NAS writes, deployment,
 commit/push, cloud changes, or disruption of running jobs. Memory/status saved.
+
+
+## 2026-11-06: v0.1.52 legitimate package keys in database maintenance
+
+Stue's first NAS --database run stopped with Invalid release key in history and
+No healthy database backup available. Root cause was our semantic validator, not
+evidence of structural corruption: acquisition item_key preserves item_type and
+accepts package records, while maintenance allowed only album/track prefixes.
+Read-only NAS query at /mnt/backup/bcfstag4/collection.sqlite3 first found54rejected
+keys with package examples. A later read confirmed album1567,track376,package54,
+and ZERO keys rejected by the corrected album/track/package plus numeric-ID rule.
+One intervening read hit an active SQLite lock; did not stop jobs or remove locks.
+No independent full NAS integrity check or maintenance/restore was performed.
+
+Fix: src/database.rs accepts package numeric keys and prints the escaped rejected
+key on a real validation failure. No stored keys, files, history or collection
+producer were rewritten. Regression creates an older album-only snapshot, then
+adds track/package records through collection::item_key and verifies maintenance
+keeps all3records without restoring/quarantining healthy history. Invalid empty
+IDs, nonnumeric suffixes and unknown prefixes still fail with identifying errors.
+
+Version0.1.52 Cargo/lock synchronized.162 tests passed,0failed,5ignored; locked
+strict Clippy, fmt, locked optimized build, workflow regression and diff checks
+passed. Binary built2026-11-06T12:07:01Z. Actual check-build.sh attempted, Docker
+daemon preflight still unavailable in this agent session. Image/package gate and
+actual NAS --database rerun remain pending. User should deploy the new image and
+rerun database maintenance when staging jobs are idle; no manual SQL repair is
+needed for this false rejection. Earlier stopped maintenance retained live history
+unchanged and made no healthy snapshot. No commit/push/deploy or NAS data writes.
+
+
+### Session close acknowledgment
+
+Stue acknowledged the v0.1.52 package-key validation fix and requested memory
+and status before the break. Both are current. Next step remains deploying the
+new container image and rerunning `database` maintenance while other staging
+jobs are idle. No further implementation or NAS changes were requested.

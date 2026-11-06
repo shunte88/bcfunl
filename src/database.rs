@@ -89,10 +89,12 @@ fn check(path: &Path) -> Result<()> {
         );
         let key = value(1)
             .strip_prefix("album")
-            .or_else(|| value(1).strip_prefix("track"));
+            .or_else(|| value(1).strip_prefix("track"))
+            .or_else(|| value(1).strip_prefix("package"));
         ensure!(
             key.is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())),
-            "Invalid release key in history"
+            "Invalid release key in history: {:?}",
+            value(1)
         );
         ensure!(
             !value(2).trim().is_empty() && !value(3).trim().is_empty(),
@@ -294,6 +296,42 @@ mod tests {
         let db = Database::open(path.to_str().unwrap()).unwrap();
         db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,purchase_date,download_date) VALUES('johnsmith','album1','Artist','Title','https://bandcamp.com/download','2026-11-01','2026-11-01T00:00:00Z')",&[]).unwrap();
     }
+    #[test]
+    fn package_and_track_keys_do_not_trigger_restoration_of_healthy_history() {
+        let root = tempfile::tempdir().unwrap();
+        let live = root.path().join("collection.sqlite3");
+        fixture(&live);
+        run(&args(root.path())).unwrap();
+        for kind in ["track", "package"] {
+            let key =
+                crate::collection::item_key(&serde_json::json!({"item_type":kind,"item_id":42}))
+                    .unwrap();
+            let db = Database::connect(live.to_str().unwrap()).unwrap();
+            db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url) VALUES('johnsmith',?,'Artist','Title','https://bandcamp.com/download')", &[&key]).unwrap();
+        }
+        run(&args(root.path())).unwrap();
+        let db = Database::read_only(live.to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.query("SELECT COUNT(*) FROM releases", &[]).unwrap()[0][0].as_deref(),
+            Some("3")
+        );
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("database-quarantine-")
+        }));
+        drop(db);
+        for invalid in ["package", "package42x", "unknown42"] {
+            let db = Database::connect(live.to_str().unwrap()).unwrap();
+            db.query("UPDATE releases SET item_key=? WHERE item_key LIKE 'package%' OR item_key LIKE 'unknown%'", &[invalid]).unwrap();
+            drop(db);
+            let error = format!("{:#}", check(&live).unwrap_err());
+            assert!(error.contains(invalid));
+        }
+    }
+
     #[test]
     fn retains_seven_verified_backups_and_restores_past_a_bad_backup() {
         let root = tempfile::tempdir().unwrap();

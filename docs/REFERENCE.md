@@ -1036,7 +1036,7 @@ This is a standalone mode; acquisition/processing flags cannot be combined.
 It manages `collection.sqlite3`, not the separate Discogs resources database.
 
 Checks cover full SQLite integrity, foreign keys, required release columns and
-primary key, owner/key syntax, nonempty artist/title values, calendar dates and
+primary key, owner/key syntax (album, track, and package keys), nonempty artist/title values, calendar dates and
 completion timestamps. They detect structural damage and some malformed values;
 they cannot establish that plausible text such as an artist name is correct.
 No healthy backup is inferred from a successful `.recover` operation alone.
