@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-11-04 (America/New_York)
-Local release: **v0.1.50**, daily database backup/recovery and early-access availability; container gate pending
+Updated: 2026-11-05 (America/New_York)
+Local release: **v0.1.51**, retries outside count, five-failure parking, and status grids; container gate pending
 
 ## Current outcome
 
@@ -2472,3 +2472,70 @@ app to rsync the database backup copies to cloud storage after the daily
 `--database` job finishes. This provides an independent copy in addition to the
 seven local verified snapshots. Cloud sync is planned, not configured or verified
 by this application or this session. No cloud provider has been selected here.
+
+
+## 2026-11-05: v0.1.51 retry phases, five-failure parking, and status grids
+
+Stue reports NAS processing has run for roughly24hours; daily database backups
+and independent Dropbox cloud backup are now stood up. This supersedes the prior
+cloud-sync planning note. Deployment was reported by Stue, not independently
+inspected. Backup folder is still <output>/backups, currently expected NAS
+/mnt/backup/bcfstag4/backups. No configurable destination or new cloud integration
+was added. Keep the existing seven verified snapshots policy.
+
+Stue observed prior acquisition failures consuming --count slots repeatedly.
+Changed acquisition to snapshot the eligible retry queue before new work, scan
+for count-limited fresh entries, complete that batch, then run the retry queue
+outside --count even when fresh work failed. Same owner/artist/date filters apply.
+New failures/deferred checks enter next run's queue, not a second immediate try.
+Capture excludes already-attempted/deferred rows from fresh slots. Retries reload
+stored download URLs, canonical release URLs, dates and private status. Query
+previously named availability::pending is now availability::retries; no LIMIT.
+Both sequential and parallel acquisition use the same two phases. Jobs with a
+large retry backlog can exceed --count substantially by design.
+
+Processing likewise sorts prior errors after fresh rows, limits only fresh
+attempts, and drains/records all active fresh workers before starting retries.
+Previously failed rows with historical process_date no longer incorrectly skip
+solely on the old success timestamp. Existing publication verification, staging
+and server locks, offline restrictions, CRC re-acquisition limit, and no-overwrite
+server safeguards remain. Cleanup's standalone removal count behavior unchanged.
+
+New automatic columns: download_failures, process_attempts, process_failures.
+Five genuine failures in either stage set parked=1, retaining errors and payloads
+and excluding future work/clean even under --force. Success resets its stage
+failure counter. Deferral/cancellation does not increment a failure counter;
+preorder checks remain eligible without exhausting the five-failure budget.
+Download attempts continue to count every attempted check; processing attempts
+are counted separately. CRC recovery/no-burn may still park sooner.
+
+Migration seeds legacy failed acquisitions from MIN(attempts,5) when download_date
+is NULL and last_error present; exhausted rows park immediately. Legacy attempts
+did not distinguish historical deferrals, so this is an estimate from existing
+history, not reconstructed event-level evidence. Prior process-error rows seed
+one known process attempt/failure because no historical process count existed.
+Database open reasserts parking at exhausted budgets: manual review/reset must
+address the relevant failure counter as well as parked flag. No automatic unpark.
+
+With --summary, preserve old acquisition table and processing totals. Processing
+adds a per-release table for attempted keys (status, attempts, error), and both
+modes add an owner-scoped whole-history status grid. Show processed, awaiting
+processing, acquisition failed, processing failed, deferred, parked and pending
+acquisition even when zero, with release/downloaded/processed totals. Parked has
+precedence; historical timestamps are counted as stored completions. Current
+artist/date filters do not narrow this second collection-wide grid. Canceled
+unfinished processing is not falsely labeled success. Shared table formatting
+retains Unicode alignment and escaped terminal controls. README/help/reference
+updated to remove contradictory old retry/count documentation.
+
+Validation:161 passed,0failed,5ignored; locked strict Clippy, fmt, locked optimized
+build, workflow-regression and whitespace checks passed. New tests prove fresh
+count slots exclude failures, parallel fresh work finishes before retry starts,
+fifth failure parks in acquisition and processing, deferred checks do not exhaust
+budget, exhausted legacy migration, owner-scoped status totals, and parking's
+force/selection exclusion. Processing barrier test uses a SQLite trigger requiring
+fresh publication to be recorded before the retry attempt may begin.
+Binary v0.1.51 built2026-11-06T04:49:09Z (Nov5local). Actual check-build.sh attempted,
+blocked at Docker daemon preflight in agent session; full image/package and NAS
+acceptance remain host-side work. No new dependencies, NAS writes, deployment,
+commit/push, cloud changes, or disruption of running jobs. Memory/status saved.

@@ -2427,3 +2427,88 @@ fn compilation_policy_cli_defaults_validation_and_label_publication() {
     assert_eq!(found[0].tags["TRACKARTIST"], ["Romy", "Peaches"]);
     assert_eq!(pcm_hash(&path).unwrap(), pcm_hash(&found[0].path).unwrap());
 }
+
+#[test]
+fn processing_retries_follow_fresh_count_and_park_at_five_failures() {
+    let (_sample, path) = fixture("flac");
+    tagging::write(&path, &sample()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    let server = root.path().join("server");
+    let folder = input.join("johnsmith/Romy");
+    fs::create_dir_all(&folder).unwrap();
+    let source = folder.join("source.flac");
+    fs::copy(path, &source).unwrap();
+    let dbpath = input.join("collection.sqlite3");
+    let db = Database::open(dbpath.to_str().unwrap()).unwrap();
+    for (key, purchase, file) in [
+        ("album1", "2026-11-03", source.to_str().unwrap()),
+        ("album2", "2026-11-02", "missing-new.zip"),
+        ("album3", "2026-11-04", "missing-retry.zip"),
+    ] {
+        db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,download_date,purchase_date,file_path,country_iso) VALUES('johnsmith',?,'Romy','Proof','https://bandcamp.com/download','complete',?,?,'GB')",&[key,purchase,file]).unwrap();
+    }
+    db.query("UPDATE releases SET process_error='prior failure',process_attempts=4,process_failures=4 WHERE item_key='album3'",&[]).unwrap();
+    db.query("CREATE TRIGGER retry_after_new BEFORE UPDATE OF process_attempts ON releases WHEN NEW.item_key='album3' AND (SELECT process_date FROM releases WHERE item_key='album1') IS NULL BEGIN SELECT RAISE(ABORT,'Retry started before fresh publication completed'); END",&[]).unwrap();
+    drop(db);
+    let args = Args::try_parse_from([
+        "bcfunl",
+        "--process",
+        "--offline",
+        "--user",
+        "johnsmith",
+        "--output",
+        input.to_str().unwrap(),
+        "--serverdir",
+        server.to_str().unwrap(),
+        "--count",
+        "1",
+        "--parallel",
+        "2",
+        "--summary",
+    ])
+    .unwrap();
+    assert!(run(&args).is_err());
+    let db = Database::open(dbpath.to_str().unwrap()).unwrap();
+    assert!(
+        db.query(
+            "SELECT process_date FROM releases WHERE item_key='album1'",
+            &[]
+        )
+        .unwrap()[0][0]
+            .is_some()
+    );
+    assert_eq!(
+        db.query(
+            "SELECT process_attempts FROM releases WHERE item_key='album2'",
+            &[]
+        )
+        .unwrap()[0][0]
+            .as_deref(),
+        Some("0")
+    );
+    assert_eq!(
+        db.query(
+            "SELECT process_attempts,process_failures,parked FROM releases WHERE item_key='album3'",
+            &[]
+        )
+        .unwrap()[0],
+        vec![Some("5".into()), Some("5".into()), Some("1".into())]
+    );
+    assert!(
+        !processing_rows(&db, &args)
+            .unwrap()
+            .iter()
+            .any(|row| row[0].as_deref() == Some("album3"))
+    );
+    let mut output = Vec::new();
+    db.processed_summary(
+        &mut output,
+        &args.user,
+        &["album1".into(), "album3".into()].into_iter().collect(),
+    )
+    .unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("success"));
+    assert!(text.contains("parked"));
+}

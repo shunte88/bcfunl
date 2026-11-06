@@ -945,3 +945,128 @@ fn older_collection_page_stops_only_strictly_before_purchase_window() {
     assert!(!before_purchase_window(&[old], None));
     assert!(!before_purchase_window(&[], Some(from)));
 }
+
+#[test]
+fn new_count_slots_exclude_retries_and_fifth_failed_acquisition_parks() {
+    let db = Database::open(":memory:").unwrap();
+    let mut a = args();
+    a.user = "johnsmith".into();
+    a.count = Some(100);
+    a.parallel = Some(2);
+    let (items, urls) = fixtures(4);
+    capture_page(&db, &a, &items, &urls, &mut HashSet::new(), &mut Vec::new()).unwrap();
+    db.query("UPDATE releases SET attempts=4,download_failures=4,last_error='previous failure' WHERE item_key='album0'",&[]).unwrap();
+    a.count = Some(2);
+    let retries = availability::retries(&db, &a).unwrap();
+    let mut fresh = Vec::new();
+    capture_page(&db, &a, &items, &urls, &mut HashSet::new(), &mut fresh).unwrap();
+    assert_eq!(
+        fresh.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec!["album1", "album2"]
+    );
+    assert_eq!(
+        retries.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec!["album0"]
+    );
+    let events = std::sync::Mutex::new(Vec::new());
+    let batch = |releases: &[Release]| {
+        process_parallel(
+            &db,
+            &a,
+            releases,
+            |r| {
+                events.lock().unwrap().push(format!("start {}", r.key));
+                Ok(r.key.clone())
+            },
+            |key| {
+                events.lock().unwrap().push(format!("finish {key}"));
+                if key == "album0" {
+                    bail!("still failing");
+                }
+                Ok(download::Downloaded {
+                    path: PathBuf::from("fixture.flac"),
+                    format: "flac".into(),
+                    publish: None,
+                })
+            },
+        )
+    };
+    batch(&fresh).unwrap();
+    assert!(batch(&retries).is_err());
+    let events = events.into_inner().unwrap();
+    let retry_start = events.iter().position(|v| v == "start album0").unwrap();
+    for key in ["album1", "album2"] {
+        assert!(
+            events
+                .iter()
+                .position(|v| v == &format!("finish {key}"))
+                .unwrap()
+                < retry_start
+        );
+    }
+    assert_eq!(db.query("SELECT attempts,download_failures,parked,last_error FROM releases WHERE item_key='album0'",&[]).unwrap()[0],vec![Some("5".into()),Some("5".into()),Some("1".into()),Some("still failing".into())]);
+    assert!(availability::retries(&db, &a).unwrap().is_empty());
+    assert!(db.completed(&a.user, "album0", true).unwrap());
+    assert_eq!(
+        db.query("SELECT attempts FROM releases WHERE item_key='album3'", &[])
+            .unwrap()[0][0]
+            .as_deref(),
+        Some("0")
+    );
+}
+
+#[test]
+fn deferred_checks_do_not_exhaust_failure_budget_and_status_is_owner_scoped() {
+    let db = Database::open(":memory:").unwrap();
+    let mut a = args();
+    a.user = "johnsmith".into();
+    let (items, urls) = fixtures(1);
+    let mut selected = Vec::new();
+    capture_page(&db, &a, &items, &urls, &mut HashSet::new(), &mut selected).unwrap();
+    for _ in 0..8 {
+        db.increment_attempts(&a.user, "album0").unwrap();
+        assert_eq!(
+            record_result(&db, &a, &selected[0], Err(availability::Deferred.into())).unwrap(),
+            0
+        );
+    }
+    assert_eq!(
+        db.query("SELECT parked,download_failures FROM releases", &[])
+            .unwrap()[0],
+        vec![Some("0".into()), Some("0".into())]
+    );
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,parked) VALUES('other','album9','Secret','Private','https://bandcamp.com/download',1)",&[]).unwrap();
+    let mut out = Vec::new();
+    db.status(&mut out, &a.user).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("Deferred"));
+    assert!(
+        out.lines()
+            .any(|line| line.split('|').map(str::trim).collect::<Vec<_>>()
+                == vec!["Parked", "0", "0", "0"])
+    );
+    assert!(!out.contains("Secret"));
+    let total = out.lines().find(|s| s.starts_with("Total")).unwrap();
+    assert_eq!(
+        total.split('|').map(str::trim).collect::<Vec<_>>(),
+        vec!["Total", "1", "0", "0"]
+    );
+}
+
+#[test]
+fn legacy_failed_acquisition_budget_is_migrated_without_retrying_exhausted_rows() {
+    let root = tempdir();
+    let path = root.join("old.sqlite3");
+    let db = Database::connect(path.to_str().unwrap()).unwrap();
+    db.query("CREATE TABLE releases(user TEXT NOT NULL,item_key TEXT NOT NULL,artist TEXT NOT NULL,release_title TEXT NOT NULL,publish_date TEXT,purchase_date TEXT,download_date TEXT,download_url TEXT NOT NULL,format TEXT,file_path TEXT,last_error TEXT,attempts INTEGER NOT NULL,last_attempt_date TEXT,PRIMARY KEY(user,item_key))",&[]).unwrap();
+    db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url,attempts,last_error) VALUES('johnsmith','album1','Artist','Title','https://bandcamp.com/download',5,'failure')",&[]).unwrap();
+    drop(db);
+    let db = Database::open(path.to_str().unwrap()).unwrap();
+    assert_eq!(
+        db.query("SELECT parked,download_failures FROM releases", &[])
+            .unwrap()[0],
+        vec![Some("1".into()), Some("5".into())]
+    );
+    drop(db);
+    fs::remove_dir_all(root).unwrap();
+}

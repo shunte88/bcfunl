@@ -116,6 +116,9 @@ impl Database {
             ("availability_status", "TEXT"),
             ("availability_checked_at", "TEXT"),
             ("release_private", "INTEGER NOT NULL DEFAULT 0"),
+            ("download_failures", "INTEGER NOT NULL DEFAULT 0"),
+            ("process_attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("process_failures", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             if !columns.iter().any(|row| row[1].as_deref() == Some(name)) {
                 db.query(
@@ -124,6 +127,22 @@ impl Database {
                 )?;
             }
         }
+        if !columns
+            .iter()
+            .any(|row| row[1].as_deref() == Some("download_failures"))
+        {
+            db.query("UPDATE releases SET download_failures=MIN(attempts,5) WHERE download_date IS NULL AND last_error IS NOT NULL", &[])?;
+        }
+        if !columns
+            .iter()
+            .any(|row| row[1].as_deref() == Some("process_attempts"))
+        {
+            db.query("UPDATE releases SET process_attempts=1,process_failures=1 WHERE process_error IS NOT NULL", &[])?;
+        }
+        db.query(
+            "UPDATE releases SET parked=1 WHERE download_failures>=5 OR process_failures>=5",
+            &[],
+        )?;
         for row in db.query(
             "SELECT user,item_key,artist,release_title FROM releases WHERE sanitized_title IS NULL",
             &[],
@@ -160,6 +179,29 @@ impl Database {
             &[&chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true), user, key],
         )?;
         Ok(())
+    }
+    pub(crate) fn retry(&self, user: &str, key: &str) -> Result<bool> {
+        Ok(!self.query("SELECT 1 FROM releases WHERE user=? AND item_key=? AND download_date IS NULL AND (attempts>0 OR availability_status IN ('pending','early-access'))", &[user,key])?.is_empty())
+    }
+    pub(crate) fn failure(
+        &self,
+        user: &str,
+        key: &str,
+        message: &str,
+        processing: bool,
+    ) -> Result<bool> {
+        let (counter, error) = if processing {
+            ("process_failures", "process_error")
+        } else {
+            ("download_failures", "last_error")
+        };
+        self.query(&format!("UPDATE releases SET {error}=?,{counter}={counter}+1,parked=CASE WHEN {counter}+1>=5 THEN 1 ELSE parked END WHERE user=? AND item_key=?"), &[message,user,key])?;
+        Ok(!self
+            .query(
+                "SELECT 1 FROM releases WHERE user=? AND item_key=? AND parked=1",
+                &[user, key],
+            )?
+            .is_empty())
     }
     fn error(&self) -> String {
         unsafe {
@@ -262,33 +304,97 @@ impl Database {
                     .collect(),
             );
         }
-        let widths: Vec<_> = (0..5)
-            .map(|column| {
-                rows.iter()
-                    .map(|row| row[column].width())
-                    .max()
-                    .unwrap_or(0)
-            })
-            .collect();
-        for (index, row) in rows.iter().enumerate() {
-            let cells: Vec<_> = row
-                .iter()
-                .enumerate()
-                .map(|(column, cell)| {
-                    let padding = " ".repeat(widths[column] - cell.width());
-                    if column == 3 && index > 0 {
-                        format!("{padding}{cell}")
-                    } else {
-                        format!("{cell}{padding}")
-                    }
-                })
-                .collect();
-            writeln!(out, "{}", cells.join(" | ").trim_end())?;
-            if index == 0 {
-                let separators: Vec<_> = widths.iter().map(|width| "-".repeat(*width)).collect();
-                writeln!(out, "{}", separators.join("-+-"))?;
+        table(out, rows)
+    }
+
+    pub(crate) fn status(&self, out: &mut impl std::io::Write, user: &str) -> Result<()> {
+        writeln!(
+            out,
+            "Current collection status (all history for this owner)"
+        )?;
+        let data=self.query("WITH states AS (SELECT CASE WHEN parked=1 THEN 'Parked' WHEN process_error IS NOT NULL THEN 'Processing failed' WHEN last_error IS NOT NULL THEN 'Acquisition failed' WHEN process_date IS NOT NULL THEN 'Processed' WHEN download_date IS NOT NULL THEN 'Awaiting processing' WHEN availability_status='pending' THEN 'Deferred' ELSE 'Pending acquisition' END AS status,download_date,process_date FROM releases WHERE user=?) SELECT status,COUNT(*),SUM(download_date IS NOT NULL),SUM(process_date IS NOT NULL) FROM states GROUP BY status ORDER BY status", &[user])?;
+        let mut rows = vec![vec![
+            "Status".into(),
+            "Releases".into(),
+            "Downloaded".into(),
+            "Processed".into(),
+        ]];
+        let mut totals = [0u64; 3];
+        for status in [
+            "Processed",
+            "Awaiting processing",
+            "Acquisition failed",
+            "Processing failed",
+            "Deferred",
+            "Parked",
+            "Pending acquisition",
+        ] {
+            let row = data.iter().find(|row| row[0].as_deref() == Some(status));
+            let mut cells = vec![status.to_string()];
+            for (i, total) in totals.iter_mut().enumerate() {
+                let count = row.and_then(|row| row[i + 1].as_deref()).unwrap_or("0");
+                *total += count.parse::<u64>()?;
+                cells.push(count.to_string());
+            }
+            rows.push(cells);
+        }
+        rows.push(
+            std::iter::once("Total".into())
+                .chain(totals.map(|v| v.to_string()))
+                .collect(),
+        );
+        table(out, rows)
+    }
+
+    pub(crate) fn processed_summary(
+        &self,
+        out: &mut impl std::io::Write,
+        user: &str,
+        keys: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        let mut rows = vec![vec![
+            "Artist".into(),
+            "Title".into(),
+            "Status".into(),
+            "Attempts".into(),
+            "Last error".into(),
+        ]];
+        for row in self.query("SELECT item_key,artist,COALESCE(sanitized_title,release_title),CASE WHEN parked=1 THEN 'parked' WHEN process_error IS NOT NULL THEN 'failed' WHEN process_date IS NOT NULL THEN 'success' ELSE 'unfinished' END,process_attempts,process_error FROM releases WHERE user=? ORDER BY purchase_date DESC,item_key", &[user])? {
+            if keys.contains(row[0].as_deref().unwrap_or_default()) {
+                rows.push(row.into_iter().skip(1).map(|value|value.unwrap_or_else(||"NULL".into()).replace('\\',"\\\\").chars().map(|c|if c.is_control(){c.escape_default().to_string()}else{c.to_string()}).collect()).collect());
             }
         }
-        Ok(())
+        table(out, rows)
     }
+}
+
+fn table(out: &mut impl std::io::Write, rows: Vec<Vec<String>>) -> Result<()> {
+    let widths: Vec<_> = (0..rows[0].len())
+        .map(|column| {
+            rows.iter()
+                .map(|row| row[column].width())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    for (index, row) in rows.iter().enumerate() {
+        let cells: Vec<_> = row
+            .iter()
+            .enumerate()
+            .map(|(column, cell)| {
+                let padding = " ".repeat(widths[column] - cell.width());
+                if column == 3 && index > 0 {
+                    format!("{padding}{cell}")
+                } else {
+                    format!("{cell}{padding}")
+                }
+            })
+            .collect();
+        writeln!(out, "{}", cells.join(" | ").trim_end())?;
+        if index == 0 {
+            let separators: Vec<_> = widths.iter().map(|width| "-".repeat(*width)).collect();
+            writeln!(out, "{}", separators.join("-+-"))?;
+        }
+    }
+    Ok(())
 }

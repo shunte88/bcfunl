@@ -79,7 +79,12 @@ See [format selection](docs/REFERENCE.md#format-and-files) for fallback rules.
 ```
 
 Either date bound can be supplied alone. Dates are inclusive **purchase dates**.
-Artist/date filters and `--count` also work with processing and cleanup. Add
+Artist/date filters and `--count` also work with processing and cleanup.
+Acquisition and processing attempt new releases first, up to `--count`, then
+retry eligible failures without consuming those slots. Five genuine failures
+park a release for review; deferred preorders do not exhaust that failure budget.
+With `--summary`, per-release results are followed by a collection-wide status
+grid. Existing processing totals remain available. Add
 `--timings` to processing commands to see where extraction, verification,
 tagging, and publication time is spent.
 

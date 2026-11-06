@@ -55,9 +55,9 @@ pub(crate) fn window(sql: &mut String, values: &mut Vec<String>, args: &Args) {
     }
 }
 
-pub(crate) fn pending(db: &Database, args: &Args) -> Result<Vec<Release>> {
+pub(crate) fn retries(db: &Database, args: &Args) -> Result<Vec<Release>> {
     let mut sql = String::from(
-        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),download_url,COALESCE(publish_date,scheduled_release_date),release_url,release_private FROM releases WHERE user=? AND parked=0 AND download_date IS NULL AND availability_status IN ('pending','early-access') AND (is_preorder=1 OR scheduled_release_date IS NOT NULL)",
+        "SELECT item_key,artist,COALESCE(sanitized_title,release_title),download_url,COALESCE(publish_date,scheduled_release_date),release_url,release_private FROM releases WHERE user=? AND parked=0 AND download_date IS NULL AND (attempts>0 OR availability_status IN ('pending','early-access'))",
     );
     let mut values = vec![args.user.clone()];
     if let Some(artist) = &args.artist {
@@ -66,10 +66,6 @@ pub(crate) fn pending(db: &Database, args: &Args) -> Result<Vec<Release>> {
     }
     window(&mut sql, &mut values, args);
     sql.push_str(" ORDER BY availability_checked_at,purchase_date DESC,item_key");
-    if let Some(count) = args.count {
-        sql.push_str(" LIMIT ?");
-        values.push(count.to_string());
-    }
     Ok(db
         .query(&sql, &values.iter().map(String::as_str).collect::<Vec<_>>())?
         .into_iter()
@@ -112,7 +108,7 @@ mod tests {
             for to in [None, Some("2026-11-07")] {
                 args.fromdt = from.map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap());
                 args.todt = to.map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap());
-                let result = pending(&db, &args).unwrap();
+                let result = retries(&db, &args).unwrap();
                 for (i, (purchase, scheduled)) in dates.iter().enumerate() {
                     let expected = args.matches(Some(
                         NaiveDate::parse_from_str(purchase, "%Y-%m-%d").unwrap(),
@@ -130,9 +126,9 @@ mod tests {
         args.todt = None;
         args.artist = Some("rTiS".into());
         args.count = Some(1);
-        assert_eq!(pending(&db, &args).unwrap().len(), 1);
+        assert_eq!(retries(&db, &args).unwrap().len(), 4);
         args.artist = Some("other".into());
-        assert!(pending(&db, &args).unwrap().is_empty());
+        assert!(retries(&db, &args).unwrap().is_empty());
         args.artist = None;
         args.count = None;
         db.query("UPDATE releases SET parked=1 WHERE item_key='album0'", &[])
@@ -142,7 +138,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(pending(&db, &args).unwrap().len(), 2);
+        assert_eq!(retries(&db, &args).unwrap().len(), 2);
     }
 
     #[test]
@@ -153,7 +149,7 @@ mod tests {
         let date = Utc::now().date_naive().succ_opt().unwrap();
         record(&db, &args, "album1", true, &[date], Some("pending")).unwrap();
         record(&db, &args, "album1", false, &[], None).unwrap();
-        let release = pending(&db, &args).unwrap().remove(0);
+        let release = retries(&db, &args).unwrap().remove(0);
         assert_eq!(release.publish, Some(date));
         assert_eq!(
             crate::record_result(&db, &args, &release, Err(Deferred.into())).unwrap(),

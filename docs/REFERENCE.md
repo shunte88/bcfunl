@@ -59,12 +59,12 @@ Options:
 | `--cookies` | Cookie export; defaults to `bandcamp.cookies.txt`. |
 | `--fromdt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
 | `--todt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
-| `--count` | Maximum eligible releases to attempt this run; omitted means all. Completed entries and missing links do not consume the limit. Preorder availability checks and deferred entries do consume it. |
+| `--count` | Maximum new release attempts; omitted means all. Eligible retries/deferred checks run afterward, outside this limit. Completed entries and missing links do not consume it. |
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
 | `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
 | `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with up to 16 connections per server per release; `--process` uses local workers. Omit for sequential work. |
 | `--timings` | With `--process`, report per-release stage times, history checks, and cleanup duration, including failed stages. |
-| `--summary` | Download mode prints the run status table; processing prints attempted/published/skipped/failed counts. |
+| `--summary` | Print per-release results and a collection-wide status grid; processing also retains attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
 | `--offline` | Disable Discogs network requests during processing. |
@@ -205,7 +205,7 @@ mode. Start with two workers because extraction and decoded-audio verification
 compete for disk bandwidth, CPU, and temporary space. SQLite history writes stay
 on the main thread, and each worker opens its own read-only genre library
 connection. The server lock and atomic no-overwrite publication remain in force.
-`--count` limits scheduled attempts after completed-release skips. On termination,
+`--count` limits new scheduled attempts after completed-release skips; existing failures retry afterward outside the limit. On termination,
 workers are joined and successful publications are recorded before exit.
 Cookies and network services are not used.
 
@@ -415,8 +415,8 @@ search. An authenticated Martin Stephenson search was verified on 2026-10-26.
 Offline processing applies user, artist substring and inclusive purchase-date
 filters in SQLite before loading eligible releases. It orders by purchase date
 descending, then item key. Completed releases verified at this server destination
-are skipped before the count limit. `--count` limits actual attempts, including
-failures; skipped releases do not consume it. With a date window, rows missing
+are skipped before the count limit. `--count` limits new attempts; prior failures
+run afterward without consuming slots. Skipped releases do not consume slots. With a date window, rows missing
 purchase_date are excluded. Download attempt counts are unchanged by processing.
 
 Private collection purchases stay eligible for downloading. When Bandcamp marks
@@ -753,8 +753,8 @@ with a small processing batch on the actual mount. Use
 
 ### Processing performance and limited runs
 
-`--count` is checked before visiting additional completed history once the limit
-is reached. ZIP extraction uses the local staging filesystem, reducing network
+After the new-release count limit is reached, additional new work is skipped;
+eligible retries still run afterward. ZIP extraction uses the local staging filesystem, reducing network
 traffic when publishing over a share. Existing-copy audio verification remains
 mandatory; `--parallel` is a release count, not a promise of higher throughput.
 Start with two workers on a remote share and compare timing output before raising
@@ -1079,14 +1079,15 @@ untrusted origins, corrupt payloads, and other real errors still fail normally.
 The release keeps a NULL download date and can be checked again. Private purchases
 retain their private status when reloaded, avoiding unavailable public-page reads.
 
-Recorded pending/early-access purchases are reconsidered before scanning new
-collection entries, oldest availability check first. They share the same count
-limit and artist filter. A date window matches purchase date OR, for these
+Recorded pending/early-access purchases and previously attempted acquisitions
+are reconsidered after the new count-limited batch, oldest availability check
+first. Retries retain the artist and date filters and do not consume count slots. A date window matches purchase date OR, for these
 preorder entries, scheduled release date; both bounds are applied to the same
 date, and either bound can be omitted. Offline processing/cleanup uses that same
 window exception. Ordinary purchases retain purchase-date filtering. A deferred
-entry consumes one count slot for its availability check. Entries never captured
-before still require discovery through the collection search/window.
+entry consumes a count slot only on its first acquisition attempt; later checks
+run in the retry phase. Entries never captured before still require discovery
+through the collection search/window.
 
 For a targeted subscription test without a date window:
 
@@ -1096,3 +1097,37 @@ For a targeted subscription test without a date window:
 
 This checks actual authenticated availability without assuming that all
 subscriptions grant early access. Live acceptance requires the owner's cookies.
+
+
+### Retry ordering, parking, and status summaries
+
+For acquisition and processing, `--count N` admits up to N new attempts. All
+eligible retries are appended in a separate phase after that batch finishes,
+including when it has failures. Parallel workers from the new batch finish and
+record their results before retry workers start. A fresh failure is not retried
+again within the same run. Retry phases retain owner, artist, and date filters;
+`--count` does not cap retry work, so a large existing backlog can extend a run.
+
+Five consecutive genuine failures in a stage park the release for review.
+`download_failures` and `process_failures` persist the separate stage budgets;
+a successful stage clears its failure counter. `process_attempts` records total
+processing attempts separately from the existing download `attempts` counter.
+Deferred availability checks and termination do not increment failure counters.
+Parking does not delete staged files and excludes work from automatic acquisition,
+processing, and cleanup, even with `--force`. Existing bounded CRC recovery and
+no-burn evidence protection remain stricter and can park earlier.
+
+At migration, known failed acquisitions seed their failure budget from existing
+attempt counts; exhausted entries are parked immediately. Prior processing failure
+counts were not recorded, so an existing processing error seeds one known failure.
+Review the last error and source before deliberately resetting a stage's failure
+counter and parked flag. No automatic unpark or server overwrite is introduced.
+
+`--summary` retains the existing acquisition per-release table and processing
+counts. Processing adds its per-release status, processing attempts, and last
+error table. Both modes add a grid for all recorded history belonging to the
+selected owner, independent of the current artist/date window. Rows show
+processed, awaiting processing, acquisition failed, processing failed, deferred,
+parked, and pending acquisition, including zeros, with release totals and stored
+download/publication completion counts. Each release belongs to exactly one
+status row; parked status takes precedence over its stored error.

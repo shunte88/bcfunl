@@ -1250,7 +1250,8 @@ pub fn run(args: &Args) -> Result<()> {
             "Discogs lookup unavailable: set DISCOGS_TOKEN or VCW_DISCOGS_TOKEN; retaining only recognized genres"
         );
     }
-    let rows = processing_rows(&db, args)?;
+    let mut rows = processing_rows(&db, args)?;
+    rows.sort_by_key(|row| row[11].is_some());
     if args.timings {
         eprintln!(
             "Timing: bcfunl v{} setup/query {:.3}s, {} eligible history rows",
@@ -1262,12 +1263,17 @@ pub fn run(args: &Args) -> Result<()> {
     let mut attempted_keys = HashSet::new();
     let mut history_time = std::time::Duration::ZERO;
     let mut attempted = 0;
+    let mut fresh_attempted = 0;
+    let mut retry_phase = false;
     let mut failures = 0;
     let mut published = 0;
     let mut skipped = 0;
     let limit = usize::from(args.parallel.unwrap_or(1));
     thread::scope(|scope| -> Result<()> {
-        let mut active = std::collections::VecDeque::new();
+        let mut active = std::collections::VecDeque::<(
+            Release,
+            std::thread::ScopedJoinHandle<'_, Result<(PathBuf, Plan, bool)>>,
+        )>::new();
         let mut record = |release: &Release,
                           result: Result<(PathBuf, Plan, bool)>,
                           skipped: &mut u32|
@@ -1296,7 +1302,7 @@ pub fn run(args: &Args) -> Result<()> {
             };
             match result {
                 Ok((path, plan, exists)) => {
-                    db.query("UPDATE releases SET process_date=?,process_error=NULL,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback),discogs_metadata=NULLIF(?,'') WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&plan.discogs_metadata.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
+                    db.query("UPDATE releases SET process_date=?,process_error=NULL,process_failures=0,processed_path=?,catalog_num=COALESCE(NULLIF(?,''),catalog_num),genre_fallback=COALESCE(NULLIF(?,''),genre_fallback),discogs_metadata=NULLIF(?,'') WHERE user=? AND item_key=?", &[&chrono::Utc::now().to_rfc3339(),&path.to_string_lossy(),&plan.catalog,&plan.genre_fallback.as_ref().map(ToString::to_string).unwrap_or_default(),&plan.discogs_metadata.as_ref().map(ToString::to_string).unwrap_or_default(),&args.user,&release.key])?;
                     if exists {
                         *skipped += 1;
                         eprintln!(
@@ -1316,10 +1322,12 @@ pub fn run(args: &Args) -> Result<()> {
                         release.artist, release.album
                     );
                     failures += 1;
-                    db.query(
-                        "UPDATE releases SET process_error=? WHERE user=? AND item_key=?",
-                        &[&message, &args.user, &release.key],
-                    )?;
+                    if db.failure(&args.user, &release.key, &message, true)? {
+                        eprintln!(
+                            "  Parked for review: {} - {}",
+                            release.artist, release.album
+                        );
+                    }
                 }
             }
             Ok(())
@@ -1333,11 +1341,23 @@ pub fn run(args: &Args) -> Result<()> {
             if shutdown::requested() {
                 break;
             }
-            if args.count.is_some_and(|limit| attempted >= limit) {
-                break;
+            let retry = row[11].is_some();
+            if !retry && args.count.is_some_and(|limit| fresh_attempted >= limit) {
+                continue;
+            }
+            if retry && !retry_phase {
+                while let Some((release, task)) = active.pop_front() {
+                    let result = task
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+                    record(&release, result, &mut skipped)?;
+                }
+                retry_phase = true;
+                eprintln!("Processing retry phase (outside --count)");
             }
             let history_started = std::time::Instant::now();
             let completed = row[9].is_some()
+                && row[11].is_none()
                 && !args.force
                 && row[10].as_deref().is_some_and(|p| {
                     completed_here(p, server, row[0].as_deref().unwrap_or_default())
@@ -1348,6 +1368,9 @@ pub fn run(args: &Args) -> Result<()> {
                 continue;
             }
             attempted += 1;
+            if !retry {
+                fresh_attempted += 1;
+            }
             let get = |i: usize| row[i].clone().unwrap_or_default();
             let release = Release {
                 key: get(0),
@@ -1365,6 +1388,7 @@ pub fn run(args: &Args) -> Result<()> {
                 release.artist, release.album
             );
             attempted_keys.insert(release.key.clone());
+            db.query("UPDATE releases SET process_attempts=process_attempts+1 WHERE user=? AND item_key=?", &[&args.user,&release.key])?;
             let worker_release = release.clone();
             active.push_back((
                 release,
@@ -1411,6 +1435,8 @@ pub fn run(args: &Args) -> Result<()> {
         println!(
             "Processing: {attempted} attempted, {published} published, {skipped} skipped, {failures} failed"
         );
+        db.processed_summary(&mut std::io::stdout().lock(), &args.user, &attempted_keys)?;
+        db.status(&mut std::io::stdout().lock(), &args.user)?;
     }
     shutdown::check()?;
     if args.clean {

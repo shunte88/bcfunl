@@ -71,7 +71,7 @@ struct Args {
     /// Inclusive UTC purchase date, YYYY-MM-DD
     #[arg(long)]
     todt: Option<NaiveDate>,
-    /// Maximum eligible releases to attempt; omit to process the collection
+    /// Maximum new releases to attempt; retries follow outside this limit
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     count: Option<u32>,
     /// Run 2-8 downloads or release-processing jobs at once; omit for sequential work
@@ -345,7 +345,9 @@ fn capture_page(
             title: sanitized,
             ..release
         };
-        if !db.completed(&args.user, &release.key, args.force)? {
+        if !db.completed(&args.user, &release.key, args.force)?
+            && !db.retry(&args.user, &release.key)?
+        {
             selected.push(release);
         }
     }
@@ -373,8 +375,8 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         let items = page["tralbums"]
             .as_array()
             .context("Missing collection search tralbums")?;
-        let mut selected = availability::pending(db, args)?;
-        let mut seen = selected.iter().map(|r| r.key.clone()).collect();
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
         capture_page(
             db,
             args,
@@ -396,8 +398,8 @@ fn capture(db: &Database, args: &Args, net: &Network) -> Result<Vec<Release>> {
         .context("Missing collection cache")?;
     let mut initial: Vec<_> = cache.values().cloned().collect();
     initial.sort_by(|a, b| b["token"].as_str().cmp(&a["token"].as_str()));
-    let mut selected = availability::pending(db, args)?;
-    let mut seen = selected.iter().map(|r| r.key.clone()).collect();
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
     capture_page(
         db,
         args,
@@ -492,7 +494,7 @@ fn record_result(
 ) -> Result<usize> {
     match result {
         Ok(done) => {
-            db.query("UPDATE releases SET download_date=?,publish_date=COALESCE(NULLIF(?,''),publish_date),format=?,file_path=?,last_error=NULL,process_date=NULL,process_error=NULL,processed_path=NULL,genre_fallback=NULL WHERE user=? AND item_key=?",
+            db.query("UPDATE releases SET download_date=?,publish_date=COALESCE(NULLIF(?,''),publish_date),format=?,file_path=?,last_error=NULL,download_failures=0,process_failures=0,process_date=NULL,process_error=NULL,processed_path=NULL,genre_fallback=NULL WHERE user=? AND item_key=?",
                 &[&Utc::now().to_rfc3339(),&done.publish.map(|d| d.to_string()).unwrap_or_default(),&done.format,&done.path.to_string_lossy(),&args.user,&release.key])?;
             Ok(0)
         }
@@ -512,10 +514,12 @@ fn record_result(
                 "  Failed: {} - {}: {message}",
                 release.artist, release.title
             );
-            db.query(
-                "UPDATE releases SET last_error=? WHERE user=? AND item_key=?",
-                &[&message, &args.user, &release.key],
-            )?;
+            if db.failure(&args.user, &release.key, &message, false)? {
+                eprintln!(
+                    "  Parked for review after five failed acquisitions: {} - {}",
+                    release.artist, release.title
+                );
+            }
             Ok(1)
         }
     }
@@ -607,28 +611,46 @@ fn run(args: Args) -> Result<()> {
             aria2::check()?;
         }
         let net = Network::new(&args.cookies)?;
+        let retries = availability::retries(&db, &args)?;
         let releases = capture(&db, &args, &net)?;
-        if args.parallel.is_some() {
-            process_parallel(
-                &db,
-                &args,
-                &releases,
-                |release| {
-                    let prepared = download::prepare(&net, &args, release, &db)?;
-                    net.pace()?;
-                    Ok(prepared)
-                },
-                |prepared| aria2::fetch(&args, prepared),
-            )
-        } else {
-            process(&db, &args, &releases, |release| {
-                download::fetch(&net, &args, release, &db)
-            })
+        let acquire = |releases: &[Release]| -> Result<()> {
+            if args.parallel.is_some() {
+                process_parallel(
+                    &db,
+                    &args,
+                    releases,
+                    |release| {
+                        let prepared = download::prepare(&net, &args, release, &db)?;
+                        net.pace()?;
+                        Ok(prepared)
+                    },
+                    |prepared| aria2::fetch(&args, prepared),
+                )
+            } else {
+                process(&db, &args, releases, |release| {
+                    download::fetch(&net, &args, release, &db)
+                })
+            }
+        };
+        let initial = acquire(&releases);
+        shutdown::check()?;
+        eprintln!(
+            "Retry phase: {} previously attempted/deferred releases (outside --count)",
+            retries.len()
+        );
+        let retried = acquire(&retries);
+        match (initial, retried) {
+            (Err(first), Err(second)) => {
+                Err(first.context(format!("Retry phase also failed: {second:#}")))
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(()),
         }
     })();
     // Dump metadata even when a request fails; token-bearing links are omitted.
     if args.summary {
         db.dump(&mut io::stdout().lock(), Some((&args.user, &started)))?;
+        db.status(&mut io::stdout().lock(), &args.user)?;
     }
     result
 }
