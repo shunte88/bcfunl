@@ -52,6 +52,7 @@ pub(super) fn pcm_hash(path: &Path) -> Result<String> {
     let mut frames = 0u64;
     loop {
         crate::shutdown::check()?;
+        crate::limits::checkpoint()?;
         let packet = match format.next_packet() {
             Ok(packet) => packet,
             Err(Error::IoError(error)) if error.kind() == ErrorKind::UnexpectedEof => break,

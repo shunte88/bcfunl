@@ -7,6 +7,7 @@ services:
     environment:
       HOME: /state
       BCFUNL_WINDOW: ${BCFUNL_WINDOW:-6}
+      BCFUNL_NICE: ${BCFUNL_NICE:-20}
       BCFUNL_COLLECTION: ${BCFUNL_COLLECTION:?Set BCFUNL_COLLECTION}
       BCFUNL_STAGING: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
       BCFUNL_MUSIC: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
@@ -80,6 +81,13 @@ services:
               "$$@"
             ;;
 
+          cleanup)
+            exec /app/bcfunl --cleanup \
+              --user "$${BCFUNL_COLLECTION}" \
+              --output "$${BCFUNL_STAGING}" \
+              "$$@"
+            ;;
+
           process)
             echo "BCFunl :: Processing staged releases"
 
@@ -88,6 +96,7 @@ services:
             # available for review should we need
             exec /app/bcfunl \
               --process \
+              --nice "$${BCFUNL_NICE}" \
               --user "$${BCFUNL_COLLECTION}" \
               --output "$${BCFUNL_STAGING}" \
               --serverdir "$${BCFUNL_MUSIC}" \
@@ -101,7 +110,7 @@ services:
             ;;
 
           *)
-            echo "Usage: bcfunl database|acquire|process [extra arguments]" >&2
+            echo "Usage: bcfunl database|acquire|process|cleanup [extra arguments]" >&2
             exit 2
             ;;
         esac

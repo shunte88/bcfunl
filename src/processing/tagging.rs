@@ -132,7 +132,9 @@ pub(super) fn read_tags(path: &Path) -> Result<Tags> {
 }
 pub fn read(path: &Path) -> Result<(Tags, f64)> {
     crate::shutdown::check()?;
+    crate::limits::checkpoint()?;
     let file = lofty::read_from_path(path)?;
+    crate::limits::checkpoint()?;
     let duration = file.properties().duration().as_secs_f64();
     ensure!(
         duration.is_finite() && duration > 0.,
@@ -194,6 +196,7 @@ fn replaced(tags: &Tags, key: &str) -> bool {
 }
 pub fn write(path: &Path, tags: &Tags) -> Result<()> {
     crate::shutdown::check()?;
+    crate::limits::checkpoint()?;
     let tags = normalize_tags(tags.clone());
     let tags = &tags;
     for (key, values) in tags {
@@ -288,6 +291,7 @@ pub fn write(path: &Path, tags: &Tags) -> Result<()> {
     }
     // Keep alternate stores (RIFF INFO, AIFF text, ID3v1/APE) consistent too.
     let file = lofty::read_from_path(path)?;
+    crate::limits::checkpoint()?;
     for mut tag in file
         .tags()
         .iter()
@@ -318,6 +322,7 @@ pub fn write(path: &Path, tags: &Tags) -> Result<()> {
 }
 pub fn picture(path: &Path) -> Result<Option<Vec<u8>>> {
     let file = lofty::read_from_path(path)?;
+    crate::limits::checkpoint()?;
     Ok(file
         .tags()
         .iter()

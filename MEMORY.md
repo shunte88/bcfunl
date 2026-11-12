@@ -7,8 +7,8 @@ this session has no general reminder/scheduling tool.
 
 # Project Memory
 
-Updated: 2026-11-04
-Current release: v0.1.48 (Vol./Volume comparison added; container gate pending). Latest native media implementation details are in the final handoff entry.
+Updated: 2026-11-12
+Current release: v0.1.53 (standalone cleanup and cooperative processing governor; container/NAS acceptance pending). Latest implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -3066,3 +3066,170 @@ Stue acknowledged the v0.1.52 package-key validation fix and requested memory
 and status before the break. Both are current. Next step remains deploying the
 new container image and rerunning `database` maintenance while other staging
 jobs are idle. No further implementation or NAS changes were requested.
+
+
+## 2026-11-08: SIGILL isolated to damaged copied executable, not AVX
+
+Stue's NAS Atom C3558 has SSE4/AES but no AVX. bcfunl --version exits132,
+aria2c/sqlite3 run. Kernel reports repeatable bcfunl offset0x84ec3e; older runs
+offset0x84dc3e. User copied exact latest image binary via docker create/cp to
+/mnt/backup/bcfunl-crash.bin. SHA256:
+c220f64764555113869e6322937581d0921fd245ef4e8667e7d60dfd0ee35a8b
+BuildID7267153d3bb9bce36a2c0cf0dcf58f64af132304; v0.1.52 built12:17:01ZNov6.
+
+Exact copied binary also exits132 on myth2017 (core disabled). Disassembly finds
+UD2 at0x84ec3e inside Tokio push_remote_task, reached during Rust std runtime
+initialization BEFORE application main. This is NOT an unsupported AVX opcode.
+GDB ptrace denied; temporary LD_PRELOAD diagnostics and temporary copies under
+/tmp established correct GOT relocation and localized failure to Rust SIGPIPE
+startup jump table at0x202568. Entry0=0x0064c6cf ->target0x84ec37 (middle of an
+unrelated instruction); entry2=0x0064c6c8 ->0x84ec30. Setting bit0x00080000 in
+those two words restores destinations0x8cec37/0x8cec30 inside std runtime.
+ONLY this change in /tmp/bcfunl-jumptable-probe makes --version succeed. This is
+a diagnostic proof, NOT an approved repair: no patched binary deployed and no
+NAS original/image/database changed. All modifications were /tmp copies.
+
+Other /tmp probes: bcfunl-startup-inspect.c/.so (constructor GOT and SIGILL
+handler diagnostics), bcfunl-main-probe, bcfunl-runtime-probe, bcfunl-call-probe,
+bcfunl-checkpoint-probe. Do not use these as application executables.
+
+Next: compare the exact same OCI image digest's /app/bcfunl checksum and --version
+on another machine (myth2017 or media2026) against NAS. Need NAS docker image
+inspect RepoDigests output and host Docker run. Agent Docker daemon access remains
+blocked and external ghcr.io DNS unavailable, so cannot obtain pristine image
+independently. Need distinguish published artifact damage from NAS extracted image
+cache/storage/RAM. Earlier NAS DB/text errors included single-bit character
+changes and FLAC/ZIP corruption; possible common integrity issue but root cause
+NOT established. Do not blame CPU, change target-cpu, deploy patched instructions,
+or label RAM proven faulty. Native repo binary still works; no source changes
+or version bump made during this diagnosis. Preserve failed binary as evidence.
+
+
+### Exact-image comparison confirms published image is healthy
+
+Stue supplied NAS RepoDigest:
+ghcr.io/shunte88/bcfunl@sha256:edf37c6bc1d72dbc43fe5599099790e226dd6e85ee8bf995aa9caafe00faf52d
+User pulled this exact digest on myth2017 and tested without staging mounts.
+/app/bcfunl SHA256=910e7d766dc14e43a1ec6037466487485678d76b181126936f07dfd52bc109b9
+and --version succeeds: v0.1.52 built2026-11-06T12:17:01Z. Failing copied NAS binary
+hash remains c220f64764555113869e6322937581d0921fd245ef4e8667e7d60dfd0ee35a8b.
+Same digest/build timestamp, different bytes and startup behavior: published
+artifact is good; NAS-local copy is damaged. Root cause within NAS extracted
+image/storage/memory path remains unknown. Not an AVX requirement or source fix.
+
+Next: at an idle maintenance window, pause scheduled jobs, remove the affected
+local image only (no broad prune/force), re-pull exact digest, verify expected
+checksum and --version before resuming. An ordinary pull alone may reuse the
+existing affected layer. If removal reports container/tag references, inspect
+those references rather than force removal or disrupting other services. Keep
+/mnt/backup/bcfunl-crash.bin as evidence. No application source/version changes
+are necessary; no NAS image or job was changed by agent. Recurrent corruption
+requires NAS RAM/storage/image-cache investigation, not CPU build flags.
+
+
+### NAS image replacement accepted, 2026-11-08
+
+Stue removed stack bcfunl4 and the affected local image (actual layers deleted),
+re-pulled exact digest edf37c6bc1d72dbc43fe5599099790e226dd6e85ee8bf995aa9caafe00faf52d,
+and verified /app/bcfunl checksum OK against
+910e7d766dc14e43a1ec6037466487485678d76b181126936f07dfd52bc109b9.
+NAS --version now succeeds: v0.1.52 built2026-11-06T12:17:01Z. Startup SIGILL
+resolved by replacing the damaged local image; no source change/version bump.
+The n62 script accidentally included explanatory prose, producing line10
+If: command not found; subsequent pull/check/version completed successfully.
+Remove that prose line from script. Next run one database task and a small
+acquisition/processing batch before resuming normal scheduling. Stack service
+name in NAS output is bcfunl4 (not repository example bcfunl). Underlying
+corruption cause remains unproven; retain failed binary evidence and investigate
+NAS memory/storage if corruption recurs. Agent made no NAS mutations.
+
+
+## Session close: NAS full cycle running, 2026-11-08
+
+Stue confirmed NAS is back up after replacing the damaged local image. Process
+listing shows docker compose run --rm -T bcfunl4 acquire active as of06:30local,
+using BCFUNL_COUNT, parallel8 and --summary. Date filters remain commented out
+intentionally, confirmed by Stue: this is a count-based full batch cycle expected
+to take several hours. NAS process branch uses --process, parallel8, template,
+summary, timings and --clean, without a count argument. Do not infer cleanup is
+disabled from stale comments in that entrypoint. Database mode is also present.
+
+Startup checksum/version acceptance passed; full acquisition/processing/cleanup
+cycle completion and database-maintenance success are NOT yet reported. Leave
+running jobs and deployment unchanged until the cycle completes. No source or
+version changes required for the SIGILL fix. Local release remains v0.1.52.
+User requested memory/status and a break. Next session review the finished batch
+summary and database job result, retain bad-binary evidence, and remember the
+underlying NAS-local corruption cause remains unknown.
+
+
+## 2026-11-12: v0.1.53 cleanup alias and cooperative processing governor
+
+Stue requested standalone --cleanup and process --nice N (10..50, default20)
+CPU/RAM percentage budgets, automatic backoff when resources are tight, and early
+exit when insufficient. Follow-up explicitly asked for a governor monitoring usage
+and throttling/stopping work. Clarified cooperative application control versus hard
+Docker/cgroup ceilings; implementation does not claim a strict kernel resource cap.
+
+--cleanup is a visible alias on the existing clean argument. Reuses standalone
+verified cleanup with no processing, staging lock, manifest verification and
+parked/no-burn safeguards. Existing --clean and combined --process --clean work.
+Compose adds cleanup mode; it must be copied into the NAS custom bcfunl4 service.
+
+New src/limits.rs governor starts only from main's --process dispatch, before
+processing initialization. It runs one lightweight Rust monitoring THREAD, not
+an external watchdog process or tool. Guard stops/joins thread on exit. Samples
+effective capacity and RSS/free memory every250ms; Linux /proc and inspectable
+cgroupv2 required. CPU available_parallelism plus ancestor cpu.max constrain cores;
+MemTotal plus ancestor memory.max constrain RAM, current cgroup headroom accounts
+for reclaimable inactive_file cache. Missing resource metrics fail closed.
+
+Shared process CPU time covers all threads. A token budget throttles native I/O,
+archive, decode, tag and publication checkpoints; idle credit capped at100ms so
+network idle cannot bank unlimited CPU bursts. Sleeps are cancellable50ms slices.
+Budget is N% OF effective container allocation, so adding tighter container caps
+is conservative (2cores allocation with20% targets0.4cores). Not Unix nice priority.
+On Atom4cores,20% targets0.8cores averaged over time. No CPU target build flags
+changed and this does not repair hardware corruption.
+
+Shared file pool and release scheduling use the initial derived worker limit,
+max8; --parallel can only lower it. Fresh admission rechecks current memory and
+drains workers to reduce concurrency. Scheduling estimate128MiB per admitted job
+plus64MiB free-memory headroom. If no working reserve fits, stop early. Governor
+requests an orderly stop if RSS reaches percentage budget, available memory drops
+below headroom, or monitoring fails. Thread-pool/release-thread creation failures
+also stop safely rather than panic or mark healthy releases bad. Release worker
+spawn now uses fallible Builder::spawn_scoped. Active workers reach safe checkpoints,
+completed publications are recorded, unfinished sources retained, automatic cleanup
+skipped on resource stop. Resource errors are recorded without incrementing the
+five-failure parking budget and are not retried as audio corruption.
+
+These are COOPERATIVE limits: native library calls, kernel I/O and allocations can
+burst before another checkpoint. RSS estimate is not a maximum album working set.
+Use Docker cpus/mem_limit/pids_limit for hard ceilings; no privileged container,
+Docker socket, writable cgroup mount, or new runtime dependency was introduced.
+Actual memory-pressure/OS thread exhaustion and hard-cap behavior not live tested.
+
+CLI/env/docs: --nice valid10..50/default20, requires process only when explicitly
+specified. Compose BCFUNL_NICE defaults20 and process branch passes it. .env.example
+includes it. README/reference/container guide explain soft controls, lower
+concurrency, early stop, standalone cleanup, and hard-limit boundary. Did not
+change NAS jobs or existing count/date settings. No new SQLite columns.
+
+Readiness adds scripts/test-processing-cli.py to scripts/check-build.sh, thus CI
+exercises real main dispatch/governor and cleanup. Uses existing FFmpeg only to
+create a synthetic60second FLAC, then native app PATH=/nonexistent to publish
+and standalone --cleanup to remove only verified source. Checks CPU accounting
+against reported budget with startup allowance. Workflow regression stub updated
+to assert this command is invoked. Manual CLI smoke passed repeatedly.
+
+Validation:166 passed,0failed,5ignored; locked strict Clippy, fmt, locked optimized
+build, Compose config with dummy env, workflow-regression, shell syntax and diff
+checks passed. Binary v0.1.53 built2026-11-12T12:35:26Z. Actual check-build.sh
+attempted; agent Docker socket still unavailable, so full image/package gate and
+NAS acceptance pending. One transient parallel test run hit server-lock reacquire
+failure in existing processing_zip_records_completion_and_skips_verified_server_audio;
+isolated rerun and subsequent complete suites passed. No production lock changes
+made. If repeated, investigate inherited-lock lifetime around concurrent test
+FFmpeg forks rather than deleting lock files. No live NAS data writes, job stops,
+commit/push/deploy, source-binary patching or cloud changes.

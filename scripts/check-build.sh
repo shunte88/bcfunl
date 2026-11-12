@@ -38,6 +38,7 @@ cargo +stable clippy --locked --all-targets -- -D warnings
 cargo +stable build --locked --release
 cargo +stable test --locked
 ./target/release/bcfunl --version
+python3 scripts/test-processing-cli.py
 docker_cmd buildx build --load --build-context vcw=../vcw --tag bcfunl:ci .
 docker_cmd run --rm bcfunl:ci --version
 docker_cmd run --rm --entrypoint sh bcfunl:ci -ec 'for tool in aria2c flock sqlite3; do command -v "$tool"; done'

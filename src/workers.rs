@@ -10,11 +10,19 @@ pub(crate) fn file_pool() -> Result<&'static rayon::ThreadPool> {
                 std::thread::available_parallelism()
                     .map(usize::from)
                     .unwrap_or(1)
-                    .min(8),
+                    .min(crate::limits::workers().unwrap_or(8)),
             )
             .build()
             .map_err(|e| e.to_string())
     })
     .as_ref()
-    .map_err(|e| anyhow::anyhow!("Create file worker pool: {e}"))
+    .map_err(|e| {
+        let message = format!("Create file worker pool: {e}");
+        if crate::limits::workers().is_some() {
+            crate::limits::stop(&message);
+            anyhow::Error::new(crate::limits::ResourceLimit(message))
+        } else {
+            anyhow::anyhow!(message)
+        }
+    })
 }

@@ -205,7 +205,7 @@ matching genres/styles replace Bandcamp genres rather than merging both.
 
 ### Daily history check
 
-The Compose service accepts `database` as well as `acquire` and `process`:
+The Compose service accepts `database`, `cleanup`, `acquire`, and `process`:
 
 ```sh
 docker compose run --rm -T bcfunl database
@@ -223,3 +223,22 @@ docker compose run --rm -T bcfunl database &&
 Keep scheduled runs separate from image updates. Backups and quarantined history
 persist inside the staging bind mount. Initialize acquisition once before enabling
 the database task on a brand-new empty staging directory.
+
+
+### Standalone cleanup and processing budget
+
+```sh
+docker compose run --rm -T bcfunl cleanup
+```
+
+This invokes `--cleanup` without a processing step. Existing manifest checks,
+parked/no-burn protection, and the staging lock still apply; it cannot overlap
+another job on the same staging directory. Set `BCFUNL_NICE=20` in `.env` for the
+process mode (10..50, default 20). It throttles CPU work, constrains worker
+admission using current memory headroom, and stops safely under memory pressure.
+
+The application budget is cooperative. Add Compose `cpus`, `mem_limit`, and
+`pids_limit` settings if you need hard kernel ceilings; choose absolute values
+for your NAS. The application percentage is applied inside the container's
+allocation, so a container capped at two cores with `--nice 20` targets 0.4 cores.
+No Docker socket access, privileged mode, or writable cgroup mount is required.

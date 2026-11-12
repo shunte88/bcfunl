@@ -23,6 +23,7 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-build-gates-') as temporary:
     tools = root / 'bin'
     tools.mkdir()
     stubs = {
+        'python3': 'echo "python3 $*" >> "$TEST_CALLS"\n',
         'git': '''case "$*" in
   *rev-parse*) echo "$TEST_REVISION" ;;
   *diff*) exit "$TEST_DIRTY" ;;
@@ -86,6 +87,7 @@ SUDO_DOCKER=1 exec "$@"
                 assert 'sudo -n cargo' not in invoked
             assert 'cargo +stable build --locked --release\n' in invoked
             assert 'cargo +stable test --locked\n' in invoked
+            assert 'python3 scripts/test-processing-cli.py\n' in invoked
             assert 'docker buildx build --load --build-context vcw=../vcw --tag bcfunl:ci .' in invoked
             assert 'docker run --rm bcfunl:ci --version' in invoked
             with tarfile.open(app / 'target/package/bcfunl-linux-x64.tar.gz') as archive:

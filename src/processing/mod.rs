@@ -104,7 +104,9 @@ use crate::archive::{collect, extract};
 fn retry_audio<T>(path: &Path, mut read: impl FnMut() -> Result<T>) -> Result<T> {
     match read() {
         Ok(value) => Ok(value),
-        Err(error) if shutdown::requested() => Err(error),
+        Err(error) if shutdown::requested() || error.is::<crate::limits::ResourceLimit>() => {
+            Err(error)
+        }
         Err(error) => {
             eprintln!(
                 "  Audio read failed for {}; retrying once: {error:#}",
@@ -149,6 +151,7 @@ fn tracks(paths: &[PathBuf]) -> Result<Vec<Track>> {
             .par_iter()
             .map(|path| {
                 shutdown::check()?;
+                crate::limits::checkpoint()?;
                 let (tags, duration) =
                     tagging::read(path).with_context(|| format!("Read {}", path.display()))?;
                 Ok(Track {
@@ -1011,6 +1014,7 @@ fn process_one(
                 let mut parts = [std::time::Duration::ZERO; 6];
                 let result = (|| -> Result<()> {
                     shutdown::check()?;
+                    crate::limits::checkpoint()?;
                     let dest = staging.join(relative);
                     measured(&mut parts[0], || {
                         fs::create_dir_all(dest.parent().context("Track parent")?)?;
@@ -1135,6 +1139,7 @@ fn process_one(
     secure_parent(server, plan.directory.parent().context("Release parent")?)?;
     let destination = server.join(&plan.directory);
     shutdown::check()?;
+    crate::limits::checkpoint()?;
     timing.next("publish");
     publish(&staging, &destination)?;
     timing.next("temporary_cleanup");
@@ -1265,10 +1270,11 @@ pub fn run(args: &Args) -> Result<()> {
     let mut attempted = 0;
     let mut fresh_attempted = 0;
     let mut retry_phase = false;
+    let mut resource_stop = None;
     let mut failures = 0;
     let mut published = 0;
     let mut skipped = 0;
-    let limit = usize::from(args.parallel.unwrap_or(1));
+    let limit = usize::from(args.parallel.unwrap_or(1)).min(crate::limits::workers().unwrap_or(8));
     thread::scope(|scope| -> Result<()> {
         let mut active = std::collections::VecDeque::<(
             Release,
@@ -1315,6 +1321,14 @@ pub fn run(args: &Args) -> Result<()> {
                     }
                 }
                 Err(_) if shutdown::requested() => {}
+                Err(error) if error.is::<crate::limits::ResourceLimit>() => {
+                    failures += 1;
+                    db.query(
+                        "UPDATE releases SET process_error=? WHERE user=? AND item_key=?",
+                        &[&format!("{error:#}"), &args.user, &release.key],
+                    )?;
+                    eprintln!("  Stopped: {error:#}");
+                }
                 Err(error) => {
                     let message = format!("{error:#}");
                     eprintln!(
@@ -1355,6 +1369,33 @@ pub fn run(args: &Args) -> Result<()> {
                 retry_phase = true;
                 eprintln!("Processing retry phase (outside --count)");
             }
+            if crate::limits::exhausted() {
+                break;
+            }
+            loop {
+                let allowed = match crate::limits::admission() {
+                    Ok(allowed) => allowed,
+                    Err(error) => {
+                        crate::limits::stop(&error.to_string());
+                        break;
+                    }
+                };
+                if active.len() < allowed {
+                    break;
+                }
+                if let Some((release, task)) = active.pop_front() {
+                    let result = task
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+                    record(&release, result, &mut skipped)?;
+                } else {
+                    crate::limits::stop("not enough free memory for one processing job");
+                    break;
+                }
+            }
+            if crate::limits::exhausted() {
+                break;
+            }
             let history_started = std::time::Instant::now();
             let completed = row[9].is_some()
                 && row[11].is_none()
@@ -1390,9 +1431,9 @@ pub fn run(args: &Args) -> Result<()> {
             attempted_keys.insert(release.key.clone());
             db.query("UPDATE releases SET process_attempts=process_attempts+1 WHERE user=? AND item_key=?", &[&args.user,&release.key])?;
             let worker_release = release.clone();
-            active.push_back((
-                release,
-                scope.spawn(move || {
+            let task = std::thread::Builder::new()
+                .name("bcfunl-release".into())
+                .spawn_scoped(scope, move || {
                     let library = library_path
                         .as_deref()
                         .map(genres::Library::open)
@@ -1406,8 +1447,20 @@ pub fn run(args: &Args) -> Result<()> {
                         lookup,
                         args,
                     )
-                }),
-            ));
+                });
+            match task {
+                Ok(task) => active.push_back((release, task)),
+                Err(error) => {
+                    let reason = format!("Cannot start release worker: {error}; sources retained");
+                    crate::limits::stop(&reason);
+                    db.query(
+                        "UPDATE releases SET process_error=? WHERE user=? AND item_key=?",
+                        &[&reason, &args.user, &release.key],
+                    )?;
+                    resource_stop = Some(reason);
+                    break;
+                }
+            }
             if active.len() == limit {
                 let (release, task) = active.pop_front().unwrap();
                 let result = task
@@ -1439,6 +1492,14 @@ pub fn run(args: &Args) -> Result<()> {
         db.status(&mut std::io::stdout().lock(), &args.user)?;
     }
     shutdown::check()?;
+    ensure!(
+        !crate::limits::exhausted() && resource_stop.is_none(),
+        "Processing stopped for insufficient resources; sources retained{}",
+        resource_stop
+            .as_deref()
+            .map(|s| format!(": {s}"))
+            .unwrap_or_default()
+    );
     if args.clean {
         let cleanup_started = std::time::Instant::now();
         let result = clean::completed(&db, args, &input, Some(&attempted_keys));

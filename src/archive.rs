@@ -24,6 +24,7 @@ pub(crate) fn copy(mut input: impl Read, mut output: impl Write) -> Result<u64> 
     let mut total = 0;
     loop {
         shutdown::check()?;
+        crate::limits::checkpoint()?;
         let n = input.read(&mut buffer)?;
         if n == 0 {
             return Ok(total);
@@ -54,6 +55,7 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     while let Some(directory) = pending.pop() {
         shutdown::check()?;
+        crate::limits::checkpoint()?;
         ensure!(
             fs::symlink_metadata(&directory)?.is_dir(),
             "Release directory is not a real directory"
@@ -62,6 +64,7 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<PathBuf>> {
             .with_context(|| format!("Read release directory {}", directory.display()))?
         {
             shutdown::check()?;
+            crate::limits::checkpoint()?;
             let entry = entry?;
             let kind = entry.file_type()?;
             ensure!(
@@ -102,6 +105,7 @@ fn member_path(name: &str) -> Result<PathBuf> {
 
 pub(crate) fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
     shutdown::check()?;
+    crate::limits::checkpoint()?;
     ensure!(
         fs::symlink_metadata(destination)?.is_dir() && fs::read_dir(destination)?.next().is_none(),
         "Extraction requires an empty real directory"
@@ -117,6 +121,7 @@ pub(crate) fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>>
     let mut total = 0u64;
     for i in 0..archive.len() {
         shutdown::check()?;
+        crate::limits::checkpoint()?;
         let member = archive.by_index(i).context("Inspect ZIP member")?;
         let path = member_path(&member.name()?)?;
         ensure!(
@@ -174,6 +179,7 @@ pub(crate) fn extract(source: &Path, destination: &Path) -> Result<Vec<PathBuf>>
                     zip::ZipArchive::new(File::open(source)?).context("Open ZIP worker")?;
                 for (index, path, _, size) in chunk {
                     shutdown::check()?;
+                    crate::limits::checkpoint()?;
                     let mut member = archive.by_index(*index)?;
                     let output = destination.join(path);
                     let mut file = OpenOptions::new()

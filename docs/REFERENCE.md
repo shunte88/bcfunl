@@ -69,6 +69,8 @@ Options:
 | `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
 | `--offline` | Disable Discogs network requests during processing. |
 | `--database` | Check collection history, retain seven verified backups, or restore the latest healthy backup. Standalone with `--output`. |
+| `--nice` | Linux processing CPU/RAM budget, 10..50%, default 20. Cooperative governor; `--parallel` remains an upper bound. |
+| `--cleanup` | Alias for standalone `--clean`; reuses verified cleanup and the staging lock. |
 | `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
 | `--serverdir` | Required library destination for processing. |
 | `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
@@ -1131,3 +1133,48 @@ processed, awaiting processing, acquisition failed, processing failed, deferred,
 parked, and pending acquisition, including zeros, with release totals and stored
 download/publication completion counts. Each release belongs to exactly one
 status row; parked status takes precedence over its stored error.
+
+
+### Processing resource governor
+
+`--process --nice N` selects a shared CPU and resident-memory budget. N is an
+integer from 10 through 50 and defaults to 20. It is a percentage, not a Unix
+scheduler priority. Acquisition, resources, database maintenance, and standalone
+cleanup do not enable the governor. Linux with inspectable cgroup v2 is currently required for this budget; missing resource metrics fail closed.
+
+A lightweight governor thread samples available memory, process RSS, CPU capacity
+and cgroup v2 limits every 250 ms. CPU accounting covers all application threads.
+Shared token accounting throttles workers at cancellation-safe checkpoints; idle
+time cannot accumulate an unlimited CPU burst. The shared file pool and release
+scheduler both use the derived worker bound, and `--parallel` cannot override it.
+A four-core NAS at 20% targets 0.8 CPU cores averaged over time, normally with one
+release/file worker. Short bursts remain possible between cooperative checkpoints.
+
+RAM admission uses the lesser of budget headroom and current available memory,
+with a 128 MiB working reserve per admitted job and 64 MiB free-memory headroom.
+It reduces admission before starting more releases; active jobs are drained when
+necessary. If even one reserve cannot fit, processing stops early. The governor
+also requests an orderly stop if RSS reaches its budget or free memory falls
+below the headroom threshold. Sources and existing publications are retained.
+Resource failures do not increment the release's five-failure counter. Already
+finished publications are recorded before exit; resource stops skip automatic
+post-processing cleanup. Standalone `--cleanup` can be run later.
+
+Cgroup v2 CPU quotas and memory maxima, including ancestors, constrain effective
+capacity; reclaimable inactive file cache is included in cgroup memory headroom.
+N is applied to that effective capacity, including container limits. These are
+cooperative safeguards rather than hard enforcement. One native tag/decoder
+operation can allocate more memory or use extra CPU before reaching a checkpoint;
+the 128 MiB reserve is a scheduling estimate, not a maximum album working set.
+The governor does not kill unrelated processes or grant itself container privileges.
+
+For strict ceilings, set Docker/Compose `cpus`, `mem_limit`, and `pids_limit` to
+appropriate absolute values for the host. A kernel OOM kill can interrupt orderly
+cleanup, so allow working headroom. Resource thresholds do not repair faulty
+hardware or storage. On a resource stop, inspect the reported budget and available
+memory, free resources or reduce other workloads, then retry the retained sources.
+
+Readiness also runs `python3 scripts/test-processing-cli.py`: it publishes a
+synthetic FLAC through the real governor-enabled executable, then exercises
+standalone `--cleanup` with no external programs on the application's PATH.
+Fixture creation uses the existing test-only FFmpeg requirement.

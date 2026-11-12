@@ -274,6 +274,20 @@ mod tests {
     #[test]
     fn clean_modes_parse_and_resources_cannot_clean() {
         assert!(Args::try_parse_from(["bcfunl", "--clean"]).is_ok());
+        let cleanup = Args::try_parse_from([
+            "bcfunl",
+            "--cleanup",
+            "--user",
+            "johnsmith",
+            "--output",
+            "downloads",
+        ])
+        .unwrap();
+        cleanup.validate().unwrap();
+        assert!(cleanup.clean);
+        assert!(!cleanup.process);
+        assert!(Args::try_parse_from(["bcfunl", "--resources", "--cleanup"]).is_err());
+        assert!(Args::try_parse_from(["bcfunl", "--database", "--cleanup"]).is_err());
         assert!(
             Args::try_parse_from([
                 "bcfunl",

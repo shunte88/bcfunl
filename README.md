@@ -88,6 +88,27 @@ grid. Existing processing totals remain available. Add
 `--timings` to processing commands to see where extraction, verification,
 tagging, and publication time is spent.
 
+### Limit processing resource use
+
+Processing defaults to `--nice 20`, a cooperative CPU/RAM budget of 20% of
+available CPU capacity and total RAM, constrained by readable cgroup v2 limits:
+
+```sh
+./bcfunl --process --nice 20 --parallel 8 --user johnsmith \
+  --output ./downloads --serverdir /music --summary
+```
+
+Choose 10 through 50 percent. A governor samples resources every 250 ms,
+reduces worker admission under pressure, and stops safely if it cannot continue.
+`--parallel` is an upper bound, not a promise to start that many jobs. Sources
+are retained on a resource stop, which does not count as a bad-release failure.
+Budget support currently requires Linux. The percentage is not Unix nice priority.
+
+These are cooperative controls, not hard CPU/RAM guarantees. Native library
+operations can briefly exceed a budget before their next safe checkpoint.
+Use Docker CPU, memory, and PID limits for kernel-enforced ceilings. The budget
+is calculated within those container limits, so combining them is conservative.
+
 ### Fill missing genres
 
 ```sh
@@ -119,10 +140,11 @@ are reconsidered within the requested artist, count, and date filters.
 ### Reclaim staging space
 
 ```sh
-./bcfunl --clean --user johnsmith --output ./downloads
+./bcfunl --cleanup --user johnsmith --output ./downloads
 ```
 
-Or add `--clean` to a processing command. Cleanup permanently removes eligible
+`--clean` remains an alias for the same action. Standalone cleanup does not tag
+or process releases. Or add `--clean` to a processing command. Cleanup permanently removes eligible
 staged payloads only after successful processing and a matching publication
 manifest with its listed files still present. Failed or unverifiable releases
 are retained. History and published music remain intact. See the

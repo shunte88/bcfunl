@@ -1070,3 +1070,35 @@ fn legacy_failed_acquisition_budget_is_migrated_without_retrying_exhausted_rows(
     drop(db);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn nice_budget_defaults_bounds_and_processing_requirement() {
+    assert_eq!(args().nice, 20);
+    for value in ["10", "20", "50"] {
+        let args = Args::try_parse_from([
+            "bcfunl",
+            "--process",
+            "--serverdir",
+            "server",
+            "--nice",
+            value,
+        ])
+        .unwrap();
+        assert_eq!(args.nice.to_string(), value);
+    }
+    for value in ["0", "9", "51", "100"] {
+        assert!(
+            Args::try_parse_from([
+                "bcfunl",
+                "--process",
+                "--serverdir",
+                "server",
+                "--nice",
+                value
+            ])
+            .is_err()
+        );
+    }
+    assert!(Args::try_parse_from(["bcfunl", "--nice", "20"]).is_err());
+    assert!(Args::try_parse_from(["bcfunl", "--cleanup", "--nice", "20"]).is_err());
+}

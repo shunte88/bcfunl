@@ -177,11 +177,13 @@ pub(crate) fn save(
     force: bool,
 ) -> Result<PathBuf> {
     crate::shutdown::check()?;
+    crate::limits::checkpoint()?;
     fs::create_dir_all(root).context("Create release directory")?;
     let mut head = [0u8; 12];
     let mut used = 0;
     while used < head.len() {
         crate::shutdown::check()?;
+        crate::limits::checkpoint()?;
         let n = reader
             .read(&mut head[used..])
             .context("Read audio header")?;
@@ -236,6 +238,7 @@ pub(crate) fn save(
         let mut buffer = [0u8; 64 * 1024];
         loop {
             crate::shutdown::check()?;
+            crate::limits::checkpoint()?;
             let n = reader.read(&mut buffer).context("Read audio download")?;
             if n == 0 {
                 break;
@@ -245,6 +248,7 @@ pub(crate) fn save(
             bytes += n as u64;
         }
         crate::shutdown::check()?;
+        crate::limits::checkpoint()?;
         ensure!(
             expected.is_none_or(|size| size == bytes),
             "Incomplete download: expected {} bytes, received {bytes}",
@@ -600,6 +604,7 @@ impl Prepared {
             Err(error) if error.is::<VerificationRequired>() => return Err(error),
             Err(error) => {
                 crate::shutdown::check()?;
+                crate::limits::checkpoint()?;
                 eprintln!(
                     "  {} - {}: status lookup failed ({error:#}); retrying the page's direct link.",
                     self.artist, self.title
@@ -625,6 +630,7 @@ pub(crate) fn with_recovery(
 ) -> Result<Downloaded> {
     for attempt in 0..3 {
         crate::shutdown::check()?;
+        crate::limits::checkpoint()?;
         match transfer(&prepared)? {
             TransferResult::Complete(done) => return Ok(done),
             TransferResult::Page(html) => {

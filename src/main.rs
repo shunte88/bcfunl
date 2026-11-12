@@ -6,6 +6,7 @@ mod database;
 mod db;
 mod download;
 mod genres;
+mod limits;
 mod metadata;
 mod net;
 #[cfg(unix)]
@@ -93,11 +94,14 @@ struct Args {
     /// Tag and publish downloads, enriching from Discogs when credentials are configured
     #[arg(long)]
     process: bool,
+    /// Cooperative CPU/RAM processing budget as a percentage of effective capacity
+    #[arg(long, default_value_t=20, value_parser=clap::value_parser!(u8).range(10..=50), requires="process")]
+    nice: u8,
     /// Process without Discogs network lookups
     #[arg(long, requires = "process")]
     offline: bool,
-    /// Remove staged payloads only after successful verified publication
-    #[arg(long)]
+    /// Remove staged payloads only after successful verified publication; can run standalone
+    #[arg(long, visible_alias = "cleanup")]
     clean: bool,
     /// Check collection history, retain seven verified backups, or restore the latest healthy backup
     #[arg(long, conflicts_with_all = ["process", "clean", "resources", "artist", "fromdt", "todt", "count", "parallel", "force", "summary"])]
@@ -592,7 +596,12 @@ fn run(args: Args) -> Result<()> {
     }
     sanitizing::load_artist_map()?;
     if args.process {
-        return processing::run(&args);
+        let _governor = limits::start(args.nice)?;
+        let result = processing::run(&args);
+        if result.is_ok() {
+            limits::checkpoint()?;
+        }
+        return result;
     }
     if args.clean {
         return processing::clean::run(&args);
