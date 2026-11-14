@@ -8,6 +8,7 @@ services:
       HOME: /state
       BCFUNL_WINDOW: ${BCFUNL_WINDOW:-6}
       BCFUNL_NICE: ${BCFUNL_NICE:-20}
+      BCFUNL_STOPFILE: ${BCFUNL_STOPFILE:-}
       BCFUNL_COLLECTION: ${BCFUNL_COLLECTION:?Set BCFUNL_COLLECTION}
       BCFUNL_STAGING: ${BCFUNL_STAGING:?Set BCFUNL_STAGING}
       BCFUNL_MUSIC: ${BCFUNL_MUSIC:?Set BCFUNL_MUSIC}
@@ -51,6 +52,10 @@ services:
           shift
         fi
 
+
+        if [ -n "$${BCFUNL_STOPFILE:-}" ]; then
+          set -- --stopfile "$${BCFUNL_STOPFILE}" "$$@"
+        fi
 
         case "$${mode}" in
           database)

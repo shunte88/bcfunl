@@ -1,11 +1,61 @@
 use anyhow::{Result, ensure};
 use std::{
     future::Future,
-    sync::atomic::{AtomicI32, Ordering},
+    path::{Path, PathBuf},
+    sync::{
+        OnceLock,
+        atomic::{AtomicI32, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+static STOP_FILE: OnceLock<PathBuf> = OnceLock::new();
+static FILE_STATUS: AtomicI32 = AtomicI32::new(0);
+static FILE_ERROR: OnceLock<String> = OnceLock::new();
+static POLL_START: OnceLock<Instant> = OnceLock::new();
+static NEXT_POLL: AtomicU64 = AtomicU64::new(0);
+
+fn probe_file(path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            FILE_STATUS.store(1, Ordering::Release);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            let _ = FILE_ERROR.set(format!(
+                "Cannot inspect stop file {}: {error}",
+                path.display()
+            ));
+            FILE_STATUS.store(2, Ordering::Release);
+        }
+    }
+}
+pub fn watch_file(path: PathBuf) -> Result<()> {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    ensure!(STOP_FILE.set(path).is_ok(), "Stop file already configured");
+    let _ = POLL_START.set(Instant::now());
+    probe_file(STOP_FILE.get().unwrap());
+    NEXT_POLL.store(50, Ordering::Relaxed);
+    Ok(())
+}
+pub fn reason() -> String {
+    if SIGNAL.load(Ordering::Relaxed) != 0 {
+        return "Termination requested".into();
+    }
+    if let Some(error) = FILE_ERROR.get() {
+        return error.clone();
+    }
+    STOP_FILE
+        .get()
+        .map(|p| format!("Stop file detected: {}", p.display()))
+        .unwrap_or_else(|| "Termination requested".into())
+}
 
 pub fn install() -> Result<()> {
     for signal in [libc::SIGINT, libc::SIGTERM] {
@@ -19,13 +69,39 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 pub fn requested() -> bool {
-    SIGNAL.load(Ordering::Relaxed) != 0
+    if SIGNAL.load(Ordering::Relaxed) != 0 || FILE_STATUS.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    if let Some(path) = STOP_FILE.get() {
+        let now = POLL_START.get_or_init(Instant::now).elapsed().as_millis() as u64;
+        let next = NEXT_POLL.load(Ordering::Relaxed);
+        if now >= next
+            && NEXT_POLL
+                .compare_exchange(
+                    next,
+                    now.saturating_add(50),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            probe_file(path);
+        }
+    }
+    FILE_STATUS.load(Ordering::Acquire) != 0
 }
 pub fn exit_code() -> i32 {
-    128 + SIGNAL.load(Ordering::Relaxed)
+    let signal = SIGNAL.load(Ordering::Relaxed);
+    if signal != 0 {
+        128 + signal
+    } else if FILE_STATUS.load(Ordering::Acquire) == 2 {
+        1
+    } else {
+        0
+    }
 }
 pub fn check() -> Result<()> {
-    ensure!(!requested(), "Termination requested");
+    ensure!(!requested(), "{}", reason());
     Ok(())
 }
 pub fn pause(duration: Duration) -> Result<()> {
@@ -47,7 +123,7 @@ pub async fn until<T>(future: impl Future<Output = T>) -> Result<T> {
     };
     tokio::select! {
         biased;
-        _ = canceled => anyhow::bail!("Termination requested"),
+        _ = canceled => anyhow::bail!("{}",reason()),
         result = future => Ok(result),
     }
 }
@@ -86,6 +162,9 @@ mod tests {
             std::env::var_os("BCFUNL_SHUTDOWN_FIXTURE").expect("fixture directory"),
         );
         install().unwrap();
+        if let Some(path) = std::env::var_os("BCFUNL_TEST_STOPFILE") {
+            watch_file(path.into()).unwrap();
+        }
         let db = Database::open(root.join("collection.sqlite3").to_str().unwrap()).unwrap();
         for key in ["done", "pending"] {
             db.query("INSERT INTO releases(user,item_key,artist,release_title,download_url) VALUES('fixture',?,'Artist','Title','https://bandcamp.com/download?fixture')",&[key]).unwrap();
@@ -162,7 +241,7 @@ mod tests {
     }
     #[test]
     fn termination_signals_cleanup() {
-        for signal in [libc::SIGINT, libc::SIGTERM] {
+        for signal in [0, libc::SIGINT, libc::SIGTERM] {
             for mode in ["pause", "save", "aria2", "async", "parallel", "processing"] {
                 let root = crate::tests::tempdir();
                 let mut child = Command::new(std::env::current_exe().unwrap())
@@ -174,6 +253,7 @@ mod tests {
                     ])
                     .env("BCFUNL_SHUTDOWN_FIXTURE", &root)
                     .env("BCFUNL_SHUTDOWN_MODE", mode)
+                    .env("BCFUNL_TEST_STOPFILE", root.join("stop"))
                     .stdout(Stdio::null())
                     .spawn()
                     .unwrap();
@@ -189,7 +269,11 @@ mod tests {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
+                if signal == 0 {
+                    fs::write(root.join("stop"), b"stop").unwrap();
+                } else {
+                    assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
+                }
                 let deadline = Instant::now() + Duration::from_secs(5);
                 let status = loop {
                     if let Some(status) = child.try_wait().unwrap() {
@@ -202,7 +286,17 @@ mod tests {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 };
-                assert_eq!(status.code(), Some(128 + signal), "{mode}");
+                assert_eq!(
+                    status.code(),
+                    Some(if signal == 0 { 0 } else { 128 + signal }),
+                    "{mode}"
+                );
+                if signal == 0 {
+                    assert!(
+                        root.join("stop").exists(),
+                        "Stop file must remain for subsequent calls"
+                    );
+                }
                 assert!(!root.join("song [flac].flac.part").exists(), "{mode}");
                 assert!(!root.join(".aria2-fixture").exists(), "{mode}");
                 assert!(

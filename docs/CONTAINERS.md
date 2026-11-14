@@ -1,244 +1,1238 @@
-# Run bcfunl in a container
+# Command and behavior reference
 
-The Compose service is a one-shot command runner, not a web server. Run it on the
-NAS itself with datasets bind-mounted from local paths. This removes the NFS
-client from the processing path, while retaining audio verification and
-no-overwrite safeguards. A container does not fix damaged audio or conflicting
-existing music-library copies.
+[Back to the README](../README.md) · [TrueNAS deployment](TRUENAS.md)
 
-## Configure
+## Build and run
 
-Compose uses the prebuilt `ghcr.io/shunte88/bcfunl:latest` image. No local
-compilation, Rust installation, or sibling VCW checkout is required on the NAS.
-The final Linux image contains aria2c, SQLite and CA certificates, plus
-optional flock and sqlite3 utilities for maintenance and inspection. Archive
-extraction, gzip resource imports and checksum verification run in Rust. Cookies, music, staging history,
-and resource databases are not baked into the image.
+Requires Rust/Cargo and the system SQLite library and headers
+(`libsqlite3-dev` on Debian/Ubuntu). The executable links SQLite directly;
+no Python, browser automation, or external `sqlite3` command is used at runtime.
+Parallel mode additionally requires a working `aria2c` on PATH.
+Builds reuse the sibling VCW checkout at `../vcw` (`vcw-metadata` and
+`vcw-types`). Keep that checkout available when building
+on another machine; the compiled executable does not need it at runtime.
+Use the commit in `.github/vcw-revision`, matching CI and Cargo.lock.
+Before declaring a release ready, run `python3 scripts/test-build-workflow.py`
+and `sh scripts/check-build.sh`; the latter requires Docker with Buildx and
+exercises the same locked build, image checks and packaging used by build.yml.
+Run it as your normal user; if Docker needs sudo, run `sudo -v` first. The
+script elevates Docker calls only, never Cargo.
+Export your logged-in **bandcamp.com** cookies in Netscape format.
 
-```sh
-cp --update=none .env.example .env
-mkdir -p container-state/logs container-state/Downloads
-id -u
-id -g
-```
+### External utilities
 
-Edit `.env` with that account's UID/GID and the actual NAS dataset paths:
+All runtime utilities must be available on PATH for the relevant mode:
 
-```dotenv
-BCFUNL_UID=1000
-BCFUNL_GID=1000
-BCFUNL_STAGING=/mnt/backup
-BCFUNL_MUSIC=/mnt/tankn4/music
-BCFUNL_COOKIES=./bandcamp.cookies.txt
-BCFUNL_IMAGE=ghcr.io/shunte88/bcfunl:latest
-```
+| Utility | Purpose | Required for |
+| --- | --- | --- |
+| `aria2c` | Parallel transfers | Download mode with `--parallel` |
 
-Both datasets and the cookie file must already exist and be accessible to that
-account. Keep cookies mode600; `container-state` must be writable by the configured
-UID/GID. The account also needs write access to the music dataset. Do not run the
-image as root to work around dataset ACL problems. Compose refuses to create
-missing host paths, avoiding an accidental empty replacement for a dataset.
-
-## Move existing history from media2026
-
-Stop all jobs, then copy staging payloads and their consistent SQLite database
-together into `/mnt/backup`. Preserve relative paths beneath staging. Back up the
-idle database before changing paths. The supplied migration changes only known
-path prefixes, keeps completion/error history, and is safe to repeat:
+Install the complete runtime utility set on Ubuntu/Debian:
 
 ```sh
-sqlite3 /mnt/backup/collection.sqlite3 ".backup '/mnt/backup/collection.before-path-migration.sqlite3'"
-sqlite3 -bail /mnt/backup/collection.sqlite3 < scripts/migrate-nas-paths.sql
+sudo apt update
+sudo apt install aria2 libsqlite3-0
 ```
 
-The transaction updates `file_path` from `/data/bcfstag3/` to `/mnt/backup/` and
-`processed_path` from `/mnt/FN042018/F8NAS1/music/` to `/mnt/tankn4/music/`.
-It prints the number of rows changed. Files are not moved by SQL. Inspect any
-other stored prefixes before running jobs; those rows are intentionally unchanged.
-The image includes the optional sqlite3 command for migration/manual inspection.
-Mount sources and targets use the same NAS-local paths; no client NFS mount or
-container path aliases are needed.
+ZIP extraction, gzip resource decoding and SHA-256 checks run in Rust.
+The optional shell maintenance wrapper also needs `flock` from `util-linux`.
 
-## Pull and check
+Source builds additionally need Rust/Cargo, a system linker (provided by
+`build-essential`), `libsqlite3-dev`, and the sibling VCW checkout described
+above. The optional `sqlite3` package provides the command for manual database
+queries; bcfunl uses the SQLite library directly.
+
+### Build and launch
 
 ```sh
-docker compose config --quiet
-docker compose pull bcfunl
-docker compose run --rm bcfunl --version
+cargo build --release
+./target/release/bcfunl --user johnsmith --count 100 \
+  --output ./downloads --format FLAC
 ```
 
-The default `docker compose up` prints help and exits; it never starts a download
-or deletion job implicitly. `docker compose run` passes arguments directly to
-bcfunl. Use the printed version to confirm the deployed image is current.
+Options:
 
-## Use a published image
+| Option | Behavior |
+| --- | --- |
+| `--user` | Bandcamp username; specify the collection owner explicitly in scripts and examples. |
+| `--artist` | Case-insensitive artist substring; offline SQL supports LIKE wildcards. Download mode uses Search my Collection and checks returned artist names; processing filters stored artists. |
+| `--cookies` | Cookie export; defaults to `bandcamp.cookies.txt`. |
+| `--fromdt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
+| `--todt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
+| `--count` | Maximum new release attempts; omitted means all. Eligible retries/deferred checks run afterward, outside this limit. Completed entries and missing links do not consume it. |
+| `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
+| `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
+| `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with up to 16 connections per server per release; `--process` uses local workers. Omit for sequential work. |
+| `--timings` | With `--process`, report per-release stage times, history checks, and cleanup duration, including failed stages. |
+| `--summary` | Print per-release results and a collection-wide status grid; processing also retains attempted/published/skipped/failed counts. |
+| `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
+| `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
+| `--offline` | Disable Discogs network requests during processing. |
+| `--database` | Check collection history, retain seven verified backups, or restore the latest healthy backup. Standalone with `--output`. |
+| `--stopfile` | Stop trigger path, default `<output>/.bcfunl-stop`. Applies to every mode at startup and runtime; trigger remains until removed. |
+| `--nice` | Linux processing CPU/RAM budget, 10..50%, default 20. Cooperative governor; `--parallel` remains an upper bound. |
+| `--cleanup` | Alias for standalone `--clean`; reuses verified cleanup and the staging lock. |
+| `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
+| `--serverdir` | Required library destination for processing. |
+| `--library` | Optional read-only Discogs research database for missing-genre fallback during processing. |
+| `--template` | Processing filename rule; defaults to the example below. |
+| `--varioustag` | Compilation release artist: `{albumartist}` (default), `{label}`, or `{albumtitle}`. Requires `--process`. |
 
-After a successful GitHub workflow, the image is available as
-`ghcr.io/shunte88/bcfunl:sha-<full-commit-sha>`. The Linux build
-must pass before image publication begins. The publication job
-builds and smoke-tests its image before pushing. Default-branch builds also
-update `latest`; other branches never move that tag. Image publication is not
-gated on a version change. The initial image targets Linux amd64 for an x64 NAS.
+For example, `--fromdt 2026-11-01 --todt 2026-11-30` selects purchases made in November
+2026. Unknown purchase dates are excluded when a date filter is active.
 
-Set `BCFUNL_IMAGE` in `.env` to the published tag, for example:
+## Format and files
 
-```dotenv
-BCFUNL_IMAGE=ghcr.io/shunte88/bcfunl:latest
-```
+Default preference, from lossless to lossy:
 
-Pull the image before the next run to pick up a newly published `latest`:
+`flac -> wav -> aiff-lossless -> alac -> aac-hi -> vorbis -> mp3-320 -> mp3-v0`
+
+FLAC, WAV, AIFF, and ALAC are lossless. AIFF precedes ALAC because
+[Bandcamp limits ALAC to 48 kHz](https://get.bandcamp.help/en/articles/15263308-can-i-upload-higher-resolution-audio),
+while FLAC/WAV/AIFF preserve the source sample rate. Advertised higher lossless
+bit depth and then sample rate outrank container preference. The requested
+lossless format breaks equal/unknown-resolution ties; the default order breaks
+remaining ties. AAC, Vorbis, and MP3 are lossy. The lossy sequence is a fallback
+preference, not a universal quality ranking across different encoders/bitrates.
+Files are saved without conversion, resampling, or upsampling.
+
+| Encoding | Single-track extension |
+| --- | --- |
+| `flac` | `.flac` |
+| `wav` | `.wav` |
+| `aiff-lossless` | `.aiff` |
+| `alac` | `.m4a` |
+| `aac-hi` | `.m4a` |
+| `vorbis` | `.ogg` |
+| `mp3-320` | `.mp3` |
+| `mp3-v0` | `.mp3` |
+
+Files go under `<output>/<user>/<artist>/<title> - <item-key> [format].<extension>`.
+Artist/title formatting uses the shared local sanitizer. Apostrophe contractions
+stay `It's`, `I'm`, and `Don't`; surnames such as `O'Rourke` stay capitalized.
+`data/forceupper.txt` supplies canonical whole-word spellings such as `XX`, `DJ`,
+and `BP` for artist and title values. This list is embedded at build time.
+Original captured `release_title` text is retained; `sanitized_title` supplies
+clean names downstream. Known artist prefixes are removed through the first
+following ` - ` separator; later title/subtitle hyphens remain intact. Leading
+`[AF015] Title` and trailing single-token bracketed catalog codes move to uppercase
+`catalog_num`. Bare colon prefixes such as `Hnrbox003: Title` require 2–12 ASCII
+letters, 3–8 digits, and at most three optional suffix letters. This is a catalog
+hint heuristic, not edition confirmation. Numeric colon titles, dates,
+common disc/volume/BPM markers and multi-word edition text remain in the title.
+Existing nonempty catalog metadata wins. Migration back-fills old rows once and
+corrects artist display without resetting download/processing history. Existing
+archives and published folders are not renamed by migration. Already-populated
+`sanitized_title` values are refreshed on collection recapture; this change does
+not rewrite them automatically.
+
+To download up to eight releases at once:
 
 ```sh
-docker compose pull bcfunl
-docker compose run --rm bcfunl --version
+./target/release/bcfunl --user johnsmith --count 100 --parallel 8
 ```
 
-For a predictable deployment, use a commit tag or the registry's image digest
-instead of `latest`. Keep Compose, `.env`, `data/`, and the mounted credentials
-and datasets configured as above. Compose has no local build configuration.
-If an existing `.env` sets `BCFUNL_IMAGE=bcfunl:local`, remove or update that
-setting; environment overrides take precedence over the default. If the registry package is
-private, sign in with `docker login ghcr.io` using an account/token with package
-read access, or deliberately make the package public in its GitHub settings.
-The workflow publishes using its repository-scoped `GITHUB_TOKEN`; no Docker Hub
-credentials are required. Image visibility is not changed automatically.
+Parallel mode resolves release metadata on the main thread, starts each aria2c
+transfer after the same randomized pause, and allows up to the requested number
+of overlapping transfers. Each process receives one release URL and uses
+`--split=20`, `--max-connection-per-server=16`, and
+`--max-concurrent-downloads=16`. The last setting limits queued files within one
+aria2 instance; it does not multiply bcfunl's release-worker count. For a single
+download host, `--parallel 8` permits up to roughly 128 connections; actual usage
+depends on payload size and server range support. Resume is enabled inside the private aria2 staging directory; overwrite and
+automatic renaming are disabled. aria2 uses its default retry limit. Final payload publication still follows
+bcfunl's `--force` policy. Cross-run resume is not provided: each release gets
+a fresh staging directory. The default minimum split size is unchanged. aria2c handles its own redirects without the Rust
+request delay. SQLite writes remain on the main thread. The ordinary sequential
+path does not require or invoke aria2c.
 
-## First processing test
+aria2c downloads each payload into a visible `bcfunl-*` staging directory
+under `~/Downloads`, matching the nuascn workflow. The HOME-based Downloads
+path is passed as-is: bind mounts and symlinks are not resolved to their backing
+paths, preserving the path accessible to Snap. aria2c's stdin entry sets
+`out=payload` per download. It also receives a mode-0600 temporary Netscape
+cookie file containing only Bandcamp-domain cookies. The file is removed when
+the transfer routine returns, including when a valid payload is retained after
+a publication error. Cookie values and signed URLs are not printed.
 
-After migration, or for new history:
+Rust then copies the payload to a destination `.part` file under `--output`,
+validates and syncs it, and publishes it atomically. This works across
+filesystems. SQLite completion is recorded only after publication succeeds.
+The staged copy is removed after success. A failed transfer, invalid/empty
+payload, or graceful termination removes its owned staging directory. If a
+valid completed payload cannot be published, its staging path is printed and
+the payload is retained for recovery until the next parallel startup. No
+automatic import of retained payloads is implemented.
+
+Before parallel requests, cleanup removes stale `bcfunl-<pid>-<hex>` directories
+under `~/Downloads`, including old payloads and `.aria2` partial/control files.
+It preserves live or inaccessible owners and, on Linux, directories referenced
+by active transfer `--dir` arguments. Symlinks, unrelated Downloads contents,
+SQLite files, and final downloads are untouched. New staging directories start
+empty; retained files from finished earlier runs are removed at startup.
+
+During handoff, the staged and destination copies coexist. `~/Downloads` may
+be a bind mount, but staging always uses that visible path. Existing contents
+of Downloads are left alone. Signed URLs go to aria2c over stdin and its output
+is suppressed.
+A missing or broken aria2c installation stops parallel mode before collection
+requests; it does not silently change to sequential mode.
+A format absent from the download metadata falls back to the next available
+format; HTTP/transfer failures are recorded for retry on the next run.
+
+A `.part` file is written first, checked against Content-Length when supplied,
+synced, and published before SQLite records completion. Payload headers reject
+HTML error pages. ZIP contents and audio streams are not decoded or fully
+validated. Ordinary failures clean up partial files; after an interrupted
+process, remove its stale `.part` before retrying. Existing files without a
+completion record require `--force`; completed rows are skipped even if their
+files were later moved or removed.
+
+## Process downloaded releases
+
+Processing uses completed rows in `<output>/collection.sqlite3`, embedded audio
+tags, and optional Discogs release enrichment. Start with a small batch:
 
 ```sh
-docker compose run --rm bcfunl --process --user johnsmith \
-  --output /mnt/backup --serverdir /mnt/tankn4/music \
-  --artist MONO --count 1 --parallel 2 --summary --timings
+cargo run --release -- --process --user johnsmith \
+  --output /data/bcfstag3 --serverdir /data2/music --count 1 --summary \
+  --template "{artist}/{album} [{country_iso}] [{catalog_num}]/{disc}-{track} - {title}"
 ```
 
-Start without cleanup and review output before adding `--clean`. Timing lines
-identify setup/history checks, local extraction, tag reading/preparation,
-existing-copy verification, genre fallback, copy/tag/audio verification, artwork,
-manifest syncing and publication. Failed stages also report their elapsed time.
-ZIP extraction is local to `--output`; prepared output remains on `--serverdir`
-for same-filesystem final publication. Both locations need temporary free space.
+`--serverdir` is required and must be a separate directory tree from `--output`.
+The example template is the default. Omit `--count` for all eligible completed
+downloads; `--fromdt` and `--todt` retain their inclusive purchase-date meaning.
+Processing defaults to one release at a time. Add `--parallel 2` through
+`--parallel 8` for concurrent release processing; aria2c is not needed in this
+mode. Start with two workers because extraction and decoded-audio verification
+compete for disk bandwidth, CPU, and temporary space. SQLite history writes stay
+on the main thread, and each worker opens its own read-only genre library
+connection. The server lock and atomic no-overwrite publication remain in force.
+`--count` limits new scheduled attempts after completed-release skips; existing failures retry afterward outside the limit. On termination,
+workers are joined and successful publications are recorded before exit.
+Cookies and network services are not used.
 
-## Other jobs
+Templates support `artist` (primary album artist), `albumartist`, `album`,
+`country_iso`, `catalog_num`, `disc`, `track`, `title`, `trackartist`, `performer`,
+`artistsort`, `albumartistsort`, and `remixer`, each inside braces. Disc and track
+numbers have at least two digits. Audio extensions are appended automatically.
+Bracketed sections with missing values disappear; unknown country/catalog values
+remain absent. Substituted values are sanitized, while template path traversal,
+unknown fields and duplicate filenames are rejected. Include `{album}` in a
+release directory before any track-specific directories, for example
+`{artist}/{album}/Disc {disc}/{track} - {title}`.
 
-Use NAS-local paths:
+The tag and performer/remixer rules are adapted from mcfunl. ARTIST,
+ALBUMARTIST, ARTISTSORT and ALBUMARTISTSORT use the primary album artist.
+TRACKARTIST holds separate primary, featured and remix credits; PERFORMER
+includes those credits and existing performers. Explicit leading album guests
+are included under the tagging policy. Repeated known artist prefixes are
+removed from album names. Other embedded fields are retained. Commas inside
+names and band names such as `Earth, Wind & Fire` remain intact. Compilations
+retain individual track credits under Various Artists.
+Embedded album/country/catalog values take precedence over SQLite fallbacks;
+Confirmed Discogs genres/styles replace embedded/Bandcamp genres; without a
+confirmed match, only source values recognized by the transformation table are
+retained. Shared VCW transformations, local overrides, hygiene rules and
+case-insensitive deduplication apply to all selected genres. The ALBUM tag includes known country and
+catalog suffixes. Cover images are retained, and an archive cover or embedded
+picture supplies `folder.jpg` or `folder.png` according to its actual format.
+
+Requirements: Linux or macOS. Native Rust libraries handle
+metadata, artwork and audio decoding. FLAC, WAV, MP3, AIFF, ALAC/AAC in M4A, and
+Vorbis/Ogg retain their audio format. Lofty updates container metadata without
+audio transcoding. Every prepared track must preserve its decoded
+PCM SHA-256 (including sample rate and channel layout) and round-trip the expected tags before publication. No audio
+transcoding or provider lookup is performed. CUE releases, unsupported RF64/ID3
+variants, missing titles/track numbers, and conflicting metadata require review;
+they remain unprocessed with their sources intact.
+
+Existing exact destinations and prior mcfunl-style artist/album folders are
+checked by unique disc/track number, count, duration and decoded PCM hashes.
+Title differences from older tagging do not reject identical audio. A skip still
+requires every matched track to decode completely and have identical audio
+hashes; this never retags or replaces existing server files.
+Verified matches skip even when filenames or country/catalog suffixes differ.
+Different audio at an existing destination is reported for review. Neither
+normal processing nor `--force` overwrites an existing server release.
+`--force` only retries completed processing; in download mode it retains its
+existing redownload/replacement meaning.
+
+SQLite adds `catalog_num`, `process_date`, `process_error`, and `processed_path`
+automatically. Processing history is separate from download dates, errors and
+attempt counts. Previously processed outputs with a valid manifest and present
+tracks skip quickly; older external outputs are verified again. A successful
+new download clears old processing completion so changed audio is reconsidered.
+A processor lock covers the destination library. Whole releases publish through
+Linux atomic no-replace directory renames. If the filesystem rejects that flag,
+bcfunl exclusively reserves a new empty destination and uses ordinary directory
+rename to replace that reservation. Existing destinations are still refused.
+The share must support atomic replacement of an empty directory; otherwise
+publication fails with sources retained. A briefly visible empty reservation
+contains no manifest and is not a completed release. Sources and archives are
+not removed unless explicit `--clean` eligibility checks succeed. SIGINT/SIGTERM reap
+children and clean private staging; SIGKILL may leave hidden staging directories.
+Verification and temporary extraction/output copies require time and free space.
+ZIP extraction uses local staging under `--output`; verified output is prepared
+on `--serverdir` for atomic publication. Use `--timings` with `--process` for
+per-stage durations, history-check time, cleanup time, and total processing time.
+
+## Release genres and country
+
+The collection item’s `item_url` is saved as `release_url` in SQLite, separately
+from its authenticated `download_url`. Custom-domain item URLs use the collection
+`url_hints.subdomain` to replace the host with `<subdomain>.bandcamp.com` over
+HTTPS, preserving the release path and query. If that page redirects back to
+its custom domain, the release metadata request permits only the exact custom
+host marked verified by the collection and matching its original item URL.
+Bandcamp cookies are never sent to the custom domain. Release-page requests use
+a full browser-compatible user agent with the bcfunl version appended; a minimal
+user agent can trigger a Bandcamp/custom-domain redirect loop. Recapture refreshes this URL even for
+completed rows encountered during the walk; missing URLs preserve earlier values.
+
+Before each selected download, the public release page supplies `genre` and
+`country_iso` in SQLite. Genre tags keep their spelling and page order, are
+deduplicated, and use a semicolon separator, for example `electronic;ambient`.
+Tags matching the sidebar location, recognized country names, or explicit
+location markers are excluded. Other artist-supplied tags are retained.
+
+`country_iso` is the uppercase ISO 3166-1 alpha-2 code from the artist sidebar,
+for example `Belfast, UK` becomes `GB`. English country names and common aliases
+are supported using a bundled table. Full US state names in city/state locations
+are recognized; ambiguous Georgia and city-only locations remain NULL.
+Missing genres also remain NULL. These are the page owner's location and tags,
+which may describe a label rather than the individual performer.
+
+Existing databases gain both nullable columns automatically. Completed releases
+still skip and are not backfilled. Metadata is saved before the audio transfer,
+so it remains available if that transfer fails. Releases without a public page
+URL cannot be enriched. The summary columns remain unchanged.
+
+## SQLite history and final output
+
+Direct format URLs are tried first. `/statdownload/` is no longer required:
+a mandatory status lookup caused a regression in version 0.1.2.
+If a transfer returns Bandcamp download-page HTML, the shared recovery path
+parses its page data, verifies artist/title identity, selects a fresh supported
+format link, and tries again. Each processing attempt allows at most three
+actual transfers. The attempts column counts the processing invocation once,
+including its internal recovery tries.
+
+During HTML recovery, status lookup may supply a fresh download/retry URL.
+Ordinary status failures are logged with their cause and fall back to the
+page's direct link; explicit verification challenges stop. Pending status
+responses are polled at the existing pace for at most twelve requests. JSONP
+is parsed without executing scripts. Returned pages are capped at 2 MiB and
+refreshed URLs must use approved Bandcamp/CDN origins. Both transfer modes
+support recovery. Rust HTTP requests and aria2c cookie loading honor cookie
+domains, paths, and expiry; Bandcamp cookies are not sent to bcbits.com.
+
+The main collection is walked newest-first, using the collection page's
+`#pagedata` and the paginated collection endpoint. The separate hidden-items
+collection is not included. Eligible links are saved **before** downloading.
+`<output>/collection.sqlite3` contains a `releases` table keyed by username and
+item key, with artist, release title, publication date, purchase date, download
+date, download-page URL, selected format, file path, attempts, last-attempt
+timestamp, and last error.
+The attempts counter increments before a release starts processing, including
+metadata failures, retries, forced downloads, and interrupted attempts. Skipped
+completed releases do not increment it. Existing databases are migrated
+automatically; historical attempts start at zero because they were not recorded.
+
+Publication dates come from collection/download metadata or the release page.
+Unavailable dates remain SQL NULL. A preorder/prerelease flag is considered stale
+when every available release date is more than 30 UTC calendar days before today,
+for any track count. Exactly 30 days does not qualify. The existing exception for
+confirmed single-track releases dated strictly before today also remains.
+Missing dates or conflicting recent/future dates prevent stale-marker cleanup.
+Purchase dates do not establish release age. These age rules govern title cleanup,
+not authenticated download availability: an owned preorder or future-dated
+release may be acquired when its download page offers supported audio. The same
+availability rule applies to refreshed links. Processing removes explicit bracketed prerelease markers from derived
+album and track titles for qualifying releases, preserving captured source titles.
+One downloadable item alone does not prove single-track cardinality.
+
+A non-NULL `download_date` skips that entry unless `--force` is supplied.
+Failures preserve any previous successful completion date and file. The utility
+continues after individual failures and exits nonzero if any failed. Collection
+capture failures stop processing; links captured so far remain in SQLite.
+
+With `--summary`, completion prints an aligned, Unicode-aware table containing
+artist, title, download date, attempts, and last error. Attempts are right-aligned;
+headers and separators make the columns readable. Full titles/errors are retained,
+and control characters are escaped. Only the current
+user's rows with `last_attempt_date >= process start` are included, so failed
+attempts and forced retries with an older completion date are also reported.
+Skipped completed releases and older/unattempted rows are excluded. The filter
+uses UTC timestamps, not purchase dates. Another simultaneous process for the
+same user/history can appear if it attempts releases after this process starts.
+Legacy rows receive a NULL last-attempt timestamp until processed again.
+
+The last column displays `success` when a download date is present and the stored
+error is NULL; otherwise it displays the stored error (or NULL for an interrupted
+attempt without an error). Errors now include the underlying cause, such as an
+HTTP status or JSON parsing failure, instead of only the outer context label. Signed links are omitted. With no `--summary`, stdout
+has no status table. Progress/errors go to stderr. The summary is also printed
+on request failures or graceful termination after database initialization; it
+may contain just the header when nothing was attempted.
 
 ```sh
-docker compose run --rm bcfunl --user johnsmith \
-  --output /mnt/backup --parallel 2 --summary
-docker compose run --rm bcfunl --resources --output /mnt/backup
+./target/release/bcfunl --count 100 --output ./downloads --summary > collection-summary.txt
 ```
 
-For the sequential maintenance wrapper:
+Keep cookies and the database private: they contain session material or signed
+links. Do not commit them. Keeping the same `--output` preserves history across
+runs; changing it creates a separate history database.
+
+## Termination
+
+Ctrl+C (SIGINT) and `kill <pid>` (SIGTERM) stop scheduling new work. In-flight
+HTTP waits and randomized delays are canceled. Active aria2c children are
+killed and reaped before their staging directories are removed; partial files
+owned by the current run are removed. Already published files finish recording
+their successful completion, and previous history is preserved. Canceled
+releases remain eligible on the next run. The table is dumped when `--summary` is enabled, and SQLite is
+closed before exit (130 for SIGINT, 143 for SIGTERM).
+
+Cleanup can wait for filesystem writes or a SQLite operation already in
+progress. `kill -9` (SIGKILL), power loss, and crashes cannot run this cleanup
+and may leave partial/staging files or children. Never delete SQLite journal
+or WAL files as part of download cleanup. This behavior requires restarting
+with the rebuilt executable; an already running older process is unchanged.
+
+## Artist-scoped runs
 
 ```sh
-docker compose run --rm --entrypoint sh bcfunl \
-  /app/scripts/maintenance.sh johnsmith \
-  /mnt/backup /mnt/tankn4/music
+./target/release/bcfunl --user johnsmith --artist "David Holmes" \
+  --output /data/bcfstag3 --format FLAC --parallel 8 --summary
+./target/release/bcfunl --process --user johnsmith --artist "David Holmes" \
+  --output /data/bcfstag3 --serverdir /data/bcfinal-test --summary
 ```
 
-The wrapper checks/backs up history first, then runs acquisition and processing with cleanup. It stops if history cannot be checked or recovered. Logs and workflow
-locks persist under `container-state`. `HOME=/state` keeps aria2's temporary
-Downloads on that same persistent storage. Cookie and mapping mounts are read-only.
+Date windows and count still apply after artist filtering. Offline artist matching uses `UPPER(artist) LIKE '%' || ? || '%'`
+with an uppercased bound value; `%` and `_` retain SQL LIKE wildcard meaning. Collection search may return
+title-only matches, which are excluded by the artist check. The authenticated
+search response is used directly; no full collection walk follows an empty
+search. An authenticated Martin Stephenson search was verified on 2026-10-26.
 
-Schedule the wrapper command from the NAS task account, starting with `cd` to
-the absolute directory containing `compose.yaml`. Keep acquisition/processing
-as one workflow. For monthly resources, use the same persistent workflow lock:
+Offline processing applies user, artist substring and inclusive purchase-date
+filters in SQLite before loading eligible releases. It orders by purchase date
+descending, then item key. Completed releases verified at this server destination
+are skipped before the count limit. `--count` limits new attempts; prior failures
+run afterward without consuming slots. Skipped releases do not consume slots. With a date window, rows missing
+purchase_date are excluded. Download attempt counts are unchanged by processing.
+
+Private collection purchases stay eligible for downloading. When Bandcamp marks
+a collection item `is_private`, its public release-page metadata lookup is
+skipped because that page can return 404 even to a purchaser. Publication and
+preorder checks still use authenticated download-page/collection data. Genre
+and country may remain missing for later processing; the original release URL
+is retained in SQLite. Ordinary public-page errors still fail visibly.
+
+Single-audio-file releases default missing track/disc numbers to 1. Existing
+tag/filename numbering is preserved; multi-file releases still require track
+numbers and explicit invalid numbers remain errors.
+
+## Artist transformations
+
+`data/artistmap.yaml` maps a whole source artist credit to canonical text values:
+
+```yaml
+bvdub . Brock Van Wey:
+  - bvdub
+  - Brock Van Wey
+Henry McCullough Andrew Weatherall:
+  - Henry McCullough
+  - Andrew Weatherall
+```
+
+The file loads at startup relative to the working directory. Edits take effect
+on the next invocation without rebuilding. If absent, the executable uses its
+bundled seed map. Malformed YAML, empty names and conflicting canonical spellings
+fail before processing. Single-value lists fix spelling/case alone. Keys match
+case insensitively with normalized whitespace; values retain exact spelling and
+bypass initcap. Every listed output name also retains its canonical case when
+appearing alone. YAML parsing uses the installed serde_yaml crate.
+
+Captured collaborations display as `bvdub / Brock Van Wey`. For mapped
+collaborations, ARTIST/ARTISTSORT hold separate mapped values; ALBUMARTIST and
+ALBUMARTISTSORT and the release folder use the first mapped name. TRACKARTIST
+and PERFORMER include all mapped names, preserving other verified credits.
+Unmapped releases keep the existing primary-artist policy. Arbitrary periods,
+commas and ampersands remain part of unmapped names.
+
+In track titles, an explicitly declared map-key phrase matching at word
+boundaries is removed and its mapped names are added to TRACKARTIST/PERFORMER
+for that track only. Surrounding title/mix wording remains; no album-wide
+propagation or new REMIXER role is inferred by this transformation. If removal
+leaves no title, processing still requires review. Album titles retain their
+wording while listed names regain canonical case. Published releases are not
+modified by editing the map; test with a fresh destination. Existing database
+rows with sanitized titles are not globally rewritten on every map change.
+
+Whole-word `And` and standalone `&` are equivalent for artist-map key lookup,
+case insensitively. Output spelling remains literal. One `Martin Stephenson &
+The Daintees` entry also matches `Martin Stephenson And The Daintees`. Its
+output may include the combined name itself followed by individual names; that
+is a flat expansion, not recursive lookup. Duplicate normalized And/& keys
+remain errors, as do conflicting indirect expansion keys/cycles. Native tag
+readback decodes explicit separators without applying transformations again.
+
+## Tag sanitizing agent skill
+
+The standard skill package is [skills/tag-sanitize](../skills/tag-sanitize/SKILL.md),
+with SKILL.md, agents/openai.yaml and supporting tag rules. To install it for
+project discovery from the repository root in a session where .agents is writable:
 
 ```sh
-docker compose run --rm --entrypoint flock bcfunl \
-  -n /state/.bcfunl-maintenance.lock /app/bcfunl \
-  --resources --output /mnt/backup
+mkdir -p .agents/skills
+cp -R skills/tag-sanitize .agents/skills/
 ```
 
-Jobs sharing staging are also protected by bcfunl's staging lock. Standalone
-`--clean` covers filtered historical successes. Combined `--process --clean`
-cleans only releases attempted in that processing invocation, so a limited test
-does not audit or remove hundreds of older payloads.
+Then start a session that discovers the installed skill and invoke `$tag-sanitize`.
+The source package remains under skills/ for maintenance and deployment. Skill
+installation does not add provider lookup, agent JSON import, or an MCP server
+to the bcfunl runtime. Install the package in an environment where `.agents/skills` is writable.
 
-## Push builds
+`--version` and `-V` include the release and UTC compilation timestamp, for
+example `bcfunl v0.1.13 (built 2026-10-26T15:07:41Z)`. The timestamp is embedded
+by build.rs and stays fixed for that build; running the executable does not
+change it. Cargo reruns the build script when source, bundled data, build script
+or Cargo manifests/lockfile change.
 
-The GitHub Actions workflow runs on every push and manual dispatch, independent
-of version changes. It currently packages a Linux x64 executable and publishes
-the Linux image with mapping files and runtime tooling. macOS and Windows jobs
-have been removed from the active build matrix.
-
-The workflow checks out `shunte88/vcw` alongside this repository. If that
-repository is private, configure a read-only `VCW_READ_TOKEN` Actions secret with
-access to it. Both jobs use the exact commit in `.github/vcw-revision`, matching
-the sibling source used to generate `Cargo.lock`. The former `VCW_REF` repository
-variable is no longer used. To update VCW, update the pin and local sibling
-checkout together, regenerate and review Cargo.lock locally, then run the full
-readiness check. CI always keeps `--locked`. Actions artifacts
-are named with the platform and commit SHA, so pushes with an unchanged version
-still produce distinct packages. Each artifact contains a tar.gz archive to
-preserve Unix executable permissions. Tools required by native binaries are installed
-separately; the Linux container includes them.
-
-Run the same native, container and artifact checks as CI before declaring a
-build ready:
+## Monthly Discogs research resources
 
 ```sh
-sudo -v # only when your Docker daemon requires sudo
-sh scripts/check-build.sh
+# Discover the latest artists and masters snapshots in the current UTC month,
+# download using the official Discogs links, verify SHA-256, and rebuild SQLite.
+./target/release/bcfunl --resources --output ./downloads
+
+# Reuse existing XML or gzip snapshots, without network requests.
+./target/release/bcfunl --resources --output ./downloads \
+  --resource-file /data2/discogs_20261001_artists.xml \
+  --master-file ./downloads/resources/discogs_20261001_masters.xml.gz
 ```
 
-The sibling `../vcw` must be at the pinned commit with unchanged dependency
-sources. Requires stable Rust with rustfmt and Clippy, the documented build/test
-tools, and Docker with Buildx. Run the script as your normal user. It checks
-Docker access first and uses `sudo -n` for Docker alone when needed, keeping
-Cargo under your normal account. Authenticate first with `sudo -v` on hosts
-that require it. The artifact is
-`target/package/bcfunl-linux-x64.tar.gz`. Without Docker daemon access, the image
-gate remains unverified even if the native build passes.
+The database is `<output>/resources/library.sqlite3`, separate from collection
+history. `--resource-file` overrides the artists input; `--master-file` overrides
+the masters input. Either override may be omitted to acquire that dataset online.
+Neither cookies nor artist-map loading is needed. Resources cannot be combined
+with `--process`, artist/date/count filters, parallel downloads or server/template
+options. `--force` rebuilds even when both source hashes are unchanged.
 
-Image execution needs a working Docker daemon and dataset access. A successful
-image pull does not by itself verify dataset permissions or processing.
+The official listing is `https://data.discogs.com/?prefix=data%2F2026%2F` for 2026;
+the year and current UTC month are determined at runtime. File links use the
+site's `?download=data/...` endpoint. No guessed S3 buckets or API credentials
+are needed. The current-month selection rejects future/other-month snapshots.
+If none is published, use explicit local files rather than silently importing
+an older month. Successful downloads are cached under the resource directory.
+The publisher's CHECKSUM manifest supplies SHA-256 digests.
 
-For optional release enrichment, put `DISCOGS_TOKEN` in the private stack `.env`
-and forward it through the service environment as in the supplied Compose file.
-Use `--process --offline` to disable network lookups. Recreate the one-shot job
-after changing its environment. Discogs matches must agree on artist/title/country;
-matching genres/styles replace Bandcamp genres rather than merging both.
+Imports stream individual XML records, including gzip input, without extracting
+the complete XML. Gzip CRC checks and SHA-256 verification run in Rust. A new
+database is built privately, indexed and checked before atomic replacement of
+the library. An importer lock prevents simultaneous rebuilds. On failure or
+SIGINT/SIGTERM, staged data is discarded and an existing library stays intact.
+Downloads/extracts supplied by the user and collection history stay untouched.
+The build needs the installed quick-xml dependency; no Python runtime is added.
+Allow space for cached archives plus old and newly built databases during refresh.
 
+| Table/field | Retained information |
+| --- | --- |
+| `artists` | Discogs ID, exact name, real name, profile, quality; JSON URLs, name variations, aliases, members and groups, including relationship IDs/attributes |
+| `masters` | Master ID, title, main release ID, year, quality, original genre/style JSON arrays |
+| `master_artists` | Ordered master credits, artist IDs, source names, name variations and join text |
+| `artist_genres` | Normalized combined genre/style value and supporting distinct-master count for each artist ID |
+| `artists.genres` | Default combined genre collection, ranked by supporting master count then name |
+| `resource_import` | Each input filename, SHA-256, import time, record count and observed XML field counts |
 
-### Daily history check
-
-The Compose service accepts `database`, `cleanup`, `acquire`, and `process`:
+Artist dumps contain no genre/style fields. Their profile text is retained as
+text, never used to guess genres. Masters provide the classifications. The
+shared `vcw_metadata::Genres` routine combines genres/styles, expands established
+mappings, preserves unknown values and removes case-insensitive duplicates. A
+master counts once for each primary credited artist even if that artist appears
+more than once. There is no propagation through aliases, groups or members.
+`artists.styles` remains NULL because the artist dump has no direct style field;
+original styles are available on masters and normalized styles contribute to
+`artists.genres`. Artists without supporting master evidence retain NULL genres.
 
 ```sh
-docker compose run --rm -T bcfunl database
+sqlite3 ./downloads/resources/library.sqlite3 \
+  "SELECT name,genres FROM artists WHERE name='David Holmes' COLLATE NOCASE;"
 ```
 
-Run this once daily before the other jobs, using the same stack directory and
-Docker-capable task account. To enforce ordering and stop on a failed check:
+Genre defaults are research/fallback evidence, not confirmation for a particular
+recording. No existing music tags are changed by `--resources`. During `--process`, the
+tag sanitizer may use this library only for missing genres, as described below.
+Release-specific and embedded genres take precedence. Masters describe release families;
+edition-specific catalog numbers, labels, countries and exact dates require
+release records. The 10.5 GB October releases archive is not downloaded by this
+command. The SQLite catalog is a shared-reader foundation for bcfunl, VCW and
+other research tools; no VCW code is changed by creating it.
+
+The October 2026 full import was verified locally: 10,243,337 artists, 2,598,586
+masters and 791,640 artists with genre defaults in a roughly 2.6 GiB SQLite
+library. An unchanged rerun skipped rebuilding. 129 source credits lacked an
+artist ID; they remain searchable by their retained name but contribute no
+artist-level genre links. Public downloads were checksum-verified with curl;
+the Rust HTTP acquisition path hit sandbox DNS restrictions during this session.
+
+## Missing-genre fallback in tag sanitizing
 
 ```sh
-docker compose run --rm -T bcfunl database &&
-  docker compose run --rm -T bcfunl acquire &&
-  docker compose run --rm -T bcfunl process
+./target/release/bcfunl --process --offline --user johnsmith \
+  --output /data/bcfstag3 --serverdir /data/bcfinal-test \
+  --library /data2/bcfunl/downloads/resources/library.sqlite3 --count 3 --summary
 ```
 
-Keep scheduled runs separate from image updates. Backups and quarantined history
-persist inside the staging bind mount. Initialize acquisition once before enabling
-the database task on a brand-new empty staging directory.
+In `--offline` mode, without `--library`, processing uses
+`<output>/resources/library.sqlite3` when present. Online processing does not apply
+artist-default estimates because they do not confirm release title and country. An absent implicit library preserves the previous offline behavior.
+An explicitly requested missing or invalid library fails before processing;
+the library is always opened SQLite read-only and never created or modified.
+
+The tag sanitizer first combines/normalizes embedded GENRE and confirmed release
+genres. Only tracks still lacking genres receive a fallback. It requires one
+exact, case-insensitive match for the primary album artist in the research
+library; absent/ambiguous names stay unresolved. It does not guess from partial
+names, biographies, aliases, group membership or another artist's recording.
+The five strongest artist genres/styles are selected by distinct-master count
+and name, then passed through the shared VCW normalization routine.
+
+Assignments are marked in `BCFUNL_GENRE_SOURCE` with the Discogs artist ID and
+master snapshot filename/hash. The published release manifest and staging
+`releases.genre_fallback` JSON retain the applied genres, evidence counts and
+affected track numbers. Confirmed `releases.genre` stays unchanged; artist
+defaults are not promoted to confirmed release classifications. A new successful
+download clears old fallback history. Tag readback and decoded-audio verification
+still precede publication. Genre-only borrowed evidence never brings dates,
+labels, catalogs, countries or artwork with it.
+
+Already published releases retain the existing skip/never-overwrite behavior.
+Use a fresh destination to test new fallback tagging; this command does not
+retag previously published server files in place. The source archives and VCW
+project remain unchanged.
 
 
-### Standalone cleanup and processing budget
+## Clean processed downloads
+
+Run cleanup alone without cookies or network access:
 
 ```sh
-docker compose run --rm -T bcfunl cleanup
+./target/release/bcfunl --clean --user johnsmith --output /data/bcfstg
 ```
 
-This invokes `--cleanup` without a processing step. Existing manifest checks,
-parked/no-burn protection, and the staging lock still apply; it cannot overlap
-another job on the same staging directory. Set `BCFUNL_NICE=20` in `.env` for the
-process mode (10..50, default 20). It throttles CPU work, constrains worker
-admission using current memory headroom, and stops safely under memory pressure.
+Or process and then clean successfully published releases in the same call:
 
-The application budget is cooperative. Add Compose `cpus`, `mem_limit`, and
-`pids_limit` settings if you need hard kernel ceilings; choose absolute values
-for your NAS. The application percentage is applied inside the container's
-allocation, so a container capped at two cores with `--nice 20` targets 0.4 cores.
-No Docker socket access, privileged mode, or writable cgroup mount is required.
+```sh
+./target/release/bcfunl --process --clean --user johnsmith \
+  --output /data/bcfstg --serverdir /data/bcfinal --parallel 2 --summary
+```
+
+Cleanup requires a nonempty `process_date`, no processing/download error, and a
+matching `.bcfunl-release.json` with all listed published files still present.
+It removes only the recorded regular audio/ZIP payload below
+`<output>/<user>/`, rejects symlink paths and shared payload references, and
+leaves directories, SQLite history, resources, and published music intact.
+Already-removed sources are skipped. Existing publications without a matching
+bcfunl manifest are retained for review. Cleanup checks publication presence;
+it does not repeat decoded-audio verification from processing.
+
+Artist and purchase-date filters also apply to cleanup. `--count` caps removed
+payloads in standalone cleanup. Combined `--process --clean` considers only
+releases attempted in that processing invocation. Standalone cleanup does
+not accept `--force` or `--parallel`; `--force` with processing never bypasses
+cleanup checks. When some releases fail processing, cleanup still handles the
+successful releases and the command retains its failure exit status. A signal
+stops work without starting cleanup. Removal is permanent; download and process
+completion history remains unchanged, so normal collection runs do not download
+the cleaned files again. Use a deliberate forced download if needed later.
+
+Download, process, and clean modes share a staging-directory lock; overlapping
+jobs using that staging directory fail immediately. All scheduled jobs must use
+the updated binary to participate in this lock.
+
+## TrueNAS scheduling
+
+For deployment paths and prepared task commands, see the
+[TrueNAS deployment guide](TRUENAS.md).
+
+Linux uses `renameat2` for publication when supported; macOS uses exclusive
+destination reservation and ordinary directory rename. Native Windows processing
+and cleanup currently require the Linux container.
+For a Linux-based TrueNAS installation, run it in a Linux container or VM with
+staging and music datasets mounted persistently. For FreeBSD-based TrueNAS CORE,
+use a Linux VM. Install the runtime utilities inside that environment, rather
+than modifying the TrueNAS appliance OS. Build there if a copied executable's
+architecture or system-library versions differ.
+
+TrueNAS documents [containers and dataset access](https://www.truenas.com/docs/scale/containers/managingcontainers/)
+and [scheduled cron jobs](https://www.truenas.com/docs/scale/systemsettings/advanced/managecronjobs/).
+Choose a task account with read/write access to staging and the music destination,
+keep cookies readable only by that account, and use absolute paths. The working
+directory must contain `data/artistmap.yaml` and other runtime mapping files.
+Set `HOME` to a persistent writable directory when using parallel downloads;
+aria2c stages under its `Downloads` directory.
+
+Use `scripts/maintenance.sh` for one sequential acquisition → process-and-clean
+workflow. Place it under the installed application's `scripts/` directory, with
+`bcfunl`, `data/`, and private cookies in the application directory. The wrapper
+requires `flock` from `util-linux` in addition to the runtime tools above.
+Processing runs even after acquisition failures; both exit statuses are reported
+and either failure makes the workflow fail. Logs are written under `logs/`.
+
+These example cron entries run **inside a Linux VM/container with cron installed**.
+Replace `/opt/bcfunl`, `/staging`, and `/music` with the actual paths. They are
+examples, not installed tasks:
+
+```cron
+# One daily acquisition, processing, and cleanup workflow.
+0 1 * * * sh /opt/bcfunl/scripts/maintenance.sh johnsmith /staging /music
+# Monthly resources use the same workflow lock to prevent overlap.
+0 4 5 * * cd /opt/bcfunl && flock -n .bcfunl-maintenance.lock ./bcfunl --resources --output /staging >> logs/resources.log 2>&1
+```
+
+Create `/opt/bcfunl/logs` before the first resource task. The default genre
+library is `/staging/resources/library.sqlite3` in these examples. An overlapping
+workflow/resource invocation exits with an error; the next scheduled invocation
+retries. Once the collection is shadowed, completed downloads and publications
+skip, keeping maintenance runs focused on new releases. Runtime `PATH` must
+include the installed utilities. Cookie expiry can require a new browser export.
+Cron logs need periodic rotation. Validate the wrapper without live downloads
+using `sh -n scripts/maintenance.sh` and
+`python3 scripts/test-maintenance.py` (Python is only needed for this check).
+
+### Ombra International catalog titles
+
+Recognize `Ombra INTL 006`, `Ombra INTL006`, and the expanded
+`Ombra International 006` case insensitively. Save the catalog hint as
+`OMBRA INTL 006`, preserving leading zeros. If the catalog designation is the
+entire title, retain it as `Ombra International 006`. If a separate title follows
+a colon/hyphen or accompanies a bracketed catalog, retain that title instead.
+Existing confirmed catalog metadata wins. Normal country/catalog template
+placeholders still apply, for example
+`Ombra International 006 [DE] [OMBRA INTL 006]` when country DE is already known.
+Do not infer country from this label rule. Original captured titles remain
+unchanged; existing saved titles refresh through collection recapture, and
+already-published files are not renamed automatically.
+
+### Genre hygiene
+
+Apply the shared bcfunl genre hygiene rules during Bandcamp capture, processing,
+and artist-level research fallback. Reject values containing any numeric
+character, including mixed words/numbers; reject values with fewer than two
+alphabetic characters; reject names matching known release artists, credited
+performers/remixers, or the explicit artist map. Name comparisons ignore case
+and punctuation. Bandcamp location-tag exclusions remain in place.
+
+Filter individual semicolon-separated inputs before VCW mapping, then validate
+mapped outputs again. Retained values use title case, including hyphenated words,
+and case-insensitive deduplication in first-seen order. Examples: `AMBIENT`
+becomes `Ambient`, `post-punk` becomes `Post-Punk`; numeric descriptions such as
+`80s` and `2-step` are rejected under this policy. If every existing value is
+rejected, remove GENRE so the existing missing-genre fallback can apply.
+
+Bandcamp capture and unmatched source genres now require a recognized mapping.
+Confirmed Discogs genre/style collections still pass through mapping and hygiene;
+unknown provider terms can remain because they come from the matched release. Existing published
+library files are not rewritten automatically; use a fresh destination when
+validating new tagging behavior. Raw Discogs research imports remain evidence;
+fallback values are filtered when applied to tracks.
+
+### Shared NAS drives
+
+Parallel existing-copy scans compare names before probing unrelated folders,
+which may be temporary directories being removed by another worker. Errors for
+relevant release paths include directory context. Candidate aliases with the
+same nonzero device/inode identity count once; genuinely separate verified
+copies still require review. Audio mismatches remain errors without overwriting.
+
+For a failed publication with error22, the reserved-empty-directory fallback
+handles filesystems that reject Linux `RENAME_NOREPLACE`. It does not use an
+unchecked ordinary rename over an existing library folder. If the share also
+rejects ordinary empty-directory replacement, publication fails safely. Validate
+with a small processing batch on the actual mount. Use
+`findmnt -T /path/to/music -o TARGET,FSTYPE,OPTIONS` to identify the mount type.
+
+### Processing performance and limited runs
+
+After the new-release count limit is reached, additional new work is skipped;
+eligible retries still run afterward. ZIP extraction uses the local staging filesystem, reducing network
+traffic when publishing over a share. Existing-copy audio verification remains
+mandatory; `--parallel` is a release count, not a promise of higher throughput.
+Start with two workers on a remote share and compare timing output before raising
+it. On a NAS-local container, datasets use local bind mounts rather than NFS.
+
+Combined `--process --clean` considers only attempted releases in that run;
+standalone `--clean` retains the filtered historical cleanup behavior. Failures
+in processing and cleanup are both reported rather than losing the processing
+error beneath a cleanup error. A decode failure now includes the offending audio
+path so source and existing destination failures can be distinguished.
+
+The message `Publish release without replacing existing server files: Invalid
+argument (os error 22)` without a destination path is from the older publication
+code. Verify the exact invoked binary with `--version` before retrying a NAS
+publication fix. media2026's reported test executable was v0.1.24, before the
+v0.1.25 fallback.
+
+### Audio validation retries and detailed timings
+
+A failed audio layout/decode read gets one fresh-process retry after a200ms
+cooperative pause. The retry is limited to read-only PCM hashing, including
+existing-copy comparisons. Cancellation stops retries. Persistent failure after
+two attempts still prevents publication; a successful decode whose hash differs
+from its counterpart also fails. Tag writes and publication are not retried by
+this mechanism, and decoding errors are never ignored.
+
+With `--timings`, the combined copy/tag/verify phase also reports aggregate
+`copy`, `write_tags`, `source_pcm_hash`, `destination_pcm_hash`, `tag_readback`,
+and `file_sync` durations. Partial totals are printed on failure. PCM hash timing
+includes layout probing and any retry. Each track is fully decoded twice for
+source/output comparison, so cost depends on total audio duration/resolution,
+CPU, storage, and concurrent releases, not just compressed archive size.
+Tag readback uses native container metadata without a subprocess duration probe; the same alias/multivalue normalization is retained.
+This is a limited overhead reduction, not a measured guarantee that a full album
+will validate within a few seconds.
+
+Acquisition with `--fromdt` stops fetching older collection pages after a whole
+page has known purchase dates strictly before that date. The initial profile
+cache does not trigger this cutoff because collection displays can be curated.
+Pages with missing purchase dates keep scanning. `--todt` alone cannot stop an
+older-page scan early. Both bounds remain inclusive; `--count` limits eligible
+unfinished releases, not the number of collection entries inspected.
+
+Processing reads and writes metadata with Lofty and validates decoded audio with
+Symphonia, following VCW's native container handling. FFmpeg, ffprobe, metaflac,
+and Python/Mutagen are not runtime requirements. FFmpeg and metaflac remain
+independent test tools for fixture generation and comparison.
+
+`--parallel` controls concurrent releases. Track reads and copy/tag/verification
+jobs share one process-wide pool capped at eight workers and available CPU
+parallelism. Multiple releases share this pool rather than each creating a new
+track pool. Omitting `--parallel` processes one release at a time while its tracks
+can still run concurrently. Timing components sum track work and may exceed wall
+time. Publication waits for every track worker and all verification checks.
+
+Semicolon-delimited artist, performer, sort-name, composer, conductor, remixer and
+related credit fields expand into native multi-values, as do genres. Values are
+trimmed and empty credits are dropped. Semicolons in titles and lyrics remain
+literal text. Native tag writing preserves multiline lyrics and comments;
+embedded NUL characters in unsplit values still require review.
+
+Comma followed by a space also separates performer/credit names, using the same
+expansion as semicolons. Explicit artist-map entries take precedence, including
+single-name entries for bands with literal commas (for example, Earth, Wind &
+Fire). Sort fields retain surname commas; use semicolons between sort names.
+Titles, lyrics and other free text keep literal commas. The existing primary
+album artist and folder rules still apply; all performers remain separate track
+artist and performer values.
+
+When embedded track artists exist, they seed track-artist and performer credits
+instead of prepending the album's primary artist. Each track's comma/semicolon
+expansion is independent; a collection-level artist roster is not copied onto
+every track. Existing explicit guest/remix/title credits are still merged.
+
+### Discogs release enrichment
+
+Set `DISCOGS_TOKEN`, `VCW_DISCOGS_TOKEN`, or `DISCOGS_API_TOKEN` in the process
+environment. Compose forwards these optional variables from its private `.env`.
+No credential is written to URLs, caches, manifests or history. No cookies are
+sent to Discogs. `--offline` disables requests even with credentials configured.
+
+Lookup requires agreement on artist, release title and ISO-normalized country;
+missing source country permits only explicit Worldwide releases. Discogs Worldwide
+matches any source country without changing the source ISO value; regional
+entries still require an exact normalized country/region match. Titles compare normalized whitespace and ASCII case; artist comparisons normalize
+Unicode case and trailing Discogs asterisks while preserving other punctuation. Existing artist mappings can supply the primary query name. No
+track-count/format restriction is imposed on this metadata-only match. The first candidate passing identity checks supplies its catalog, genres and
+styles. No cross-edition consensus or genre intersection is required. Existing source catalogs take precedence.
+
+The shared VCW provider/client supplies parsing, a one-day response cache,
+rate limiting at 60 requests/minute across release workers, bounded retries,
+timeouts and cancellation. Cache files are under `<output>/resources/discogs-cache`.
+Requests are confined to HTTPS api.discogs.com and do not follow redirects.
+Lookup failures keep only map-recognized source genres and print a diagnostic.
+Artist-default resource guesses are reserved for explicit `--offline` processing.
+
+Confirmed evidence is recorded in `releases.discogs_metadata` and the publication
+manifest; tags include one selected DISCOGSID and BCFUNL_GENRE_SOURCE.
+Enrichment occurs before filenames/templates, so a newly found catalog is usable
+in `{catalog_num}`. `--timings` reports `discogs_lookup` separately. Completed
+publications still skip normally and existing server copies are never overwritten.
+The local `data/genremap.dat` overrides include descriptive EBM spellings mapping
+to `EBM;Electronic`; canonical EBM/IDM acronyms remain uppercase.
+
+Discogs lookup tries the Bandcamp primary artist first, then confirmed aliases
+from reciprocal artist-map entries, then a title-only retrieval fallback. Every
+candidate and fetched release still must match a recognized artist alias, title,
+and country. Credit-map members that do not map back to the primary artist are
+not automatically treated as identity aliases. Bandcamp primary naming and
+server credit expansion are preserved. Diagnostics report search result counts
+and artist/title/country rejections separately. Cached empty primary searches do
+not prevent fresh alias queries.
+
+Discogs `Worldwide` is an explicit country wildcard, not an ISO country to write
+into tags or filenames. It can also match when the source country is unknown,
+leaving that source country empty. Provenance records the original provider
+countries and `exact-or-worldwide` policy; other unknown countries do not match.
+
+Discogs artist comparisons ignore trailing asterisks used for alternate-name
+credits and normalize case with Unicode lowercase. This applies to search hits,
+fetched release artists and alias checks. Stored artist names, internal asterisks,
+and title punctuation are preserved.
+
+### First eligible Discogs release
+
+Lookup now stops at the first candidate in provider result order whose artist
+(or confirmed alias), title and country qualify. Use that one record's catalog,
+genres and styles consistently and capture only its Discogs ID. Existing valid
+source catalogs still take precedence. If no candidate qualifies, print the
+reason and proceed with recognized source genres; no broader inference is made.
+No tag-agent invocation is needed for these deterministic rules.
+
+Composite countries such as `UK & US` and `UK&US` match either GB or US, through
+ISO normalization of the listed components. Worldwide remains a wildcard;
+regional entries do not match unlisted countries. Catalogs `DG011` and `DG 011`
+are both accepted. The selected record's spelling is preserved, and differences
+in later candidates cannot suppress its metadata. Earlier all-edition consensus
+and shared-style-intersection behavior has been removed.
+
+### Generic catalog decoration in track titles
+
+A trailing `[album title-catalog]` or `(album title: catalog)` group can supply a
+missing release catalog and be removed from the track title. The album portion
+must match the cleaned album name; the code must pass the shared letter/number
+catalog checks. This applies across labels, including codes with spaces or
+hyphens. Repeated codes differing only in spaces/hyphens agree; preserve the
+first source spelling, uppercased. Existing embedded or confirmed catalogs win.
+Genuinely conflicting inferred codes remain for review with sources retained.
+
+For example, `Sex [Chiodi EP-Ombrantl033]` under album `Chiodi EP` yields title
+`Sex` and catalog `OMBRANTL033`, available to `{catalog_num}` and CATALOGNUMBER.
+The source code is extracted literally, without guessing a label's spelling or
+adding per-label rules. Ordinary remix/version suffixes and groups naming a
+different album are preserved.
+
+Discogs lookup removes trailing year-qualified remaster/reissue notes from
+search and title comparison only. Supported forms include `(2026 Remaster)`,
+`[Remastered 2026]`, `- 2026 Reissue`, and `2026 RM/RE`, including reversed
+year order and re-issued/re-mastered spellings. Album tags and folder names
+retain the edition note. Remix, live, bonus-track, and unqualified year text
+remain significant. This matches a base title, not a specific pressing; the
+existing first eligible artist/title/country selection still applies.
+
+ZIP archives are validated before extraction: relative member paths only, no
+links or special files, duplicate names, file/directory collisions, or existing
+destination contents. Stored and Deflate ZIP members, including ZIP64, are
+streamed with CRC verification into a private temporary directory. Extraction
+and audio jobs share one bounded pool of at most eight workers across releases.
+Every copy checks cancellation between 128 KiB blocks. Limits are 100,000 members,
+64 GiB per member and 1 TiB total declared output. Unsupported compression or
+encrypted archives fail with their source retained. Directory walking is native,
+iterative, sorted and refuses symlinks.
+
+Discogs joint release credits are compared as complete artist combinations,
+allowing comma, semicolon, slash, ampersand and `and` separators and ignoring
+order, case and trailing alternate-name asterisks. Every credited member must
+match one-to-one through confirmed aliases. Existing reciprocal band aliases
+remain supported; a partial artist or unrelated real-name performer is not a
+match. Full release artist arrays are checked, not only their first entry.
+Vinyl side layouts and digital track counts do not constrain this lookup;
+artist combination, title and country remain required.
+
+Explicit album-wide Discogs `Performer` credits are appended to PERFORMER;
+`Composer` and `Composed By` credits are appended to COMPOSER;
+`Conductor` and `Conducted By` credits are appended to CONDUCTOR,
+preserving existing values and preferring the displayed artist-name variation
+when supplied. These credits come from the already cached confirmed release,
+with no extra HTTP request. Producer-only and track-scoped credits are excluded.
+The source album artist and naming convention remain unchanged. This does not
+retag previously published releases in place.
+
+Discogs artist identity comparison reuses VCW's numeric disambiguation cleanup:
+`Mono (7)` matches `MONO`, while meaningful qualifiers such as `(Live)` remain.
+`Various` and `Various Artists` are equivalent compilation credits. These rules
+apply to artist comparisons only; source display names and album titles remain
+unchanged.
+
+The artist map also canonicalizes bare `VA` (case-insensitive), alongside
+`V/A`, `V.A.`, `V_A` and `Various`, to `Various Artists`. Keep any NAS bind-mounted
+`data/artistmap.yaml` synchronized; an existing mounted map overrides the bundled
+map. Individual track credits remain intact.
+
+### Compilation release artist
+
+`--varioustag` changes the release grouping only for compilations recognized as
+Various Artists (including mapped VA variants and confirmed label-storefront
+compilations). Noncompilation releases keep their artist. Quote the value:
+
+```sh
+./bcfunl --process --user johnsmith --output ./downloads \
+  --serverdir /path/to/music --varioustag '{label}'
+```
+
+- `{albumartist}` retains the default `Various Artists` grouping.
+- `{label}` uses the embedded LABEL, or a confirmed Discogs label when absent.
+  A validated label-storefront compilation can supply its storefront label.
+  If no label is available, keep `Various Artists` and report the fallback.
+- `{albumtitle}` uses the cleaned album title without country/catalog decoration.
+
+The chosen value supplies ARTIST, ALBUMARTIST and their sort tags, plus the
+`{artist}`/`{albumartist}` template fields. `COMPILATION=1` remains set under
+all policies. Individual TRACKARTIST/PERFORMER credits and composer/conductor
+values are preserved. LABEL remains label metadata. Existing embedded labels
+take precedence over Discogs; conflicting embedded labels require review when
+using `{label}`. Existing server files are never moved or retagged automatically.
+Use a fresh destination to inspect the changed grouping.
+
+Discogs title lookup and comparison ignore grouping parentheses and square
+brackets while retaining their words. For example, `Title (Remixes Vol. 1)`
+matches `Title Remixes Vol. 1`; volume numbers and words such as Remixes or Live
+remain required. Source titles and written display tags retain their grouping punctuation.
+
+Title comparison treats `Vol.`, `Vol`, and `Volume` as equivalent immediately
+before a numeric volume identifier. Volume numbers remain significant. This
+comparison-only rule preserves query spelling, source tags and display names.
+
+
+### CRC recovery and parked payloads
+
+On a ZIP CRC checksum failure, processing preserves the failed archive in a
+unique `.parked-no-burn-*` directory beside the payload before attempting one
+complete fresh acquisition. It uses the stored download page and format with
+a fresh HTTP stream, without resuming or overwriting any existing file. Captured
+release metadata is retained. Other extraction errors do not trigger this retry.
+
+The retry allowance is persisted before network access. A second CRC failure
+parks the replacement too. Failed acquisition, interruption, or offline mode
+leaves the release parked for manual review. Parked releases are excluded from
+both acquisition and processing, including `--force`, so scheduled jobs can
+continue with other releases. A valid replacement resumes normal processing;
+other processing failures retain the replacement for the usual processing retry.
+
+SQLite automatically adds `releases.parked`, `releases.crc_reacquired`, and the
+`parked_payloads` evidence ledger. Every ledger entry has `no_burn=1`; `--clean`
+protects these paths even after a replacement publishes successfully. Disk use
+includes all parked copies until the operator reviews them. The no-burn flag
+protects against this application's cleanup, not external deletion commands.
+
+Inspect parked evidence without changing it:
+
+```sh
+sqlite3 downloads/collection.sqlite3 \
+  "SELECT item_key,path,parked_date,reason,no_burn FROM parked_payloads WHERE user='johnsmith';"
+sqlite3 downloads/collection.sqlite3 \
+  "SELECT item_key,parked,crc_reacquired,process_error FROM releases WHERE parked=1;"
+```
+
+There is no automatic reset or third acquisition. Review the evidence and the
+error before deliberately restoring a valid source and clearing the release's
+`parked` flag. Keep the evidence ledger and its `no_burn` protection intact.
+
+
+### Daily database checks and recovery
+
+Run `bcfunl --database --user johnsmith --output /mnt/backup/bcfstag4` before the
+daily acquisition and processing jobs. It uses the same staging lock, so no
+cooperating job can update history while it checks, backs up, or restores it.
+This is a standalone mode; acquisition/processing flags cannot be combined.
+It manages `collection.sqlite3`, not the separate Discogs resources database.
+
+Checks cover full SQLite integrity, foreign keys, required release columns and
+primary key, owner/key syntax (album, track, and package keys), nonempty artist/title values, calendar dates and
+completion timestamps. They detect structural damage and some malformed values;
+they cannot establish that plausible text such as an artist name is correct.
+No healthy backup is inferred from a successful `.recover` operation alone.
+
+Snapshots use SQLite's native backup API, including committed WAL data. A new
+snapshot is checked and synced before publication as
+`backups/collection.sqlite3.YYYYMMDDTHHMMSS.nnnnnnnnnZ`. Seven latest verified
+backups are retained. Suspect backups are skipped for restoration and preserved
+for review rather than silently deleted. Repeated manual runs each create a
+backup; schedule this once daily to obtain approximately a week of history.
+
+If the live database fails checks, candidates are checked newest first. The
+selected backup is copied and migrated in a private temporary directory, then
+checked again. Original database and journal/WAL/SHM files are preserved under
+`database-quarantine-*` before a verified replacement is installed. Current DDL
+is applied automatically. If no healthy backup exists, the job fails without
+creating empty replacement history. First initialize a new staging directory
+with acquisition, then enable the daily database job.
+
+A restored snapshot can forget a day's downloads or publications. Re-acquisition
+may be necessary, especially after cleanup. Existing server releases still
+undergo audio verification and are never overwritten. Parked no-burn directories
+remain protected even if the restored ledger predates their creation. Keep
+backups on reliable storage; these local snapshots do not replace an independent
+copy protecting against loss of the entire staging disk. No automatic cleanup
+of quarantined databases is performed.
+
+### Preorder and early-access availability
+
+History records `is_preorder` (ever observed), `scheduled_release_date` (latest
+observed release date), `availability_status`, `availability_checked_at`, and
+`release_private`. Source dates and preorder evidence are retained even when
+an authenticated download is available before publication. Availability states
+are `captured`, `pending`, `available`, and `early-access`. An offered audio link
+is provisional evidence; completion is recorded only after a successful transfer.
+
+When no supported audio link exists for a preorder/future release, it is marked
+pending, logged as deferred, and does not make the run fail. Network failures,
+untrusted origins, corrupt payloads, and other real errors still fail normally.
+The release keeps a NULL download date and can be checked again. Private purchases
+retain their private status when reloaded, avoiding unavailable public-page reads.
+
+Recorded pending/early-access purchases and previously attempted acquisitions
+are reconsidered after the new count-limited batch, oldest availability check
+first. Retries retain the artist and date filters and do not consume count slots. A date window matches purchase date OR, for these
+preorder entries, scheduled release date; both bounds are applied to the same
+date, and either bound can be omitted. Offline processing/cleanup uses that same
+window exception. Ordinary purchases retain purchase-date filtering. A deferred
+entry consumes a count slot only on its first acquisition attempt; later checks
+run in the retry phase. Entries never captured before still require discovery
+through the collection search/window.
+
+For a targeted subscription test without a date window:
+
+```sh
+./bcfunl --user johnsmith --output ./downloads --artist "Eve Maret" --count 1 --summary
+```
+
+This checks actual authenticated availability without assuming that all
+subscriptions grant early access. Live acceptance requires the owner's cookies.
+
+
+### Retry ordering, parking, and status summaries
+
+For acquisition and processing, `--count N` admits up to N new attempts. All
+eligible retries are appended in a separate phase after that batch finishes,
+including when it has failures. Parallel workers from the new batch finish and
+record their results before retry workers start. A fresh failure is not retried
+again within the same run. Retry phases retain owner, artist, and date filters;
+`--count` does not cap retry work, so a large existing backlog can extend a run.
+
+Five consecutive genuine failures in a stage park the release for review.
+`download_failures` and `process_failures` persist the separate stage budgets;
+a successful stage clears its failure counter. `process_attempts` records total
+processing attempts separately from the existing download `attempts` counter.
+Deferred availability checks and termination do not increment failure counters.
+Parking does not delete staged files and excludes work from automatic acquisition,
+processing, and cleanup, even with `--force`. Existing bounded CRC recovery and
+no-burn evidence protection remain stricter and can park earlier.
+
+At migration, known failed acquisitions seed their failure budget from existing
+attempt counts; exhausted entries are parked immediately. Prior processing failure
+counts were not recorded, so an existing processing error seeds one known failure.
+Review the last error and source before deliberately resetting a stage's failure
+counter and parked flag. No automatic unpark or server overwrite is introduced.
+
+`--summary` retains the existing acquisition per-release table and processing
+counts. Processing adds its per-release status, processing attempts, and last
+error table. Both modes add a grid for all recorded history belonging to the
+selected owner, independent of the current artist/date window. Rows show
+processed, awaiting processing, acquisition failed, processing failed, deferred,
+parked, and pending acquisition, including zeros, with release totals and stored
+download/publication completion counts. Each release belongs to exactly one
+status row; parked status takes precedence over its stored error.
+
+
+### Processing resource governor
+
+`--process --nice N` selects a shared CPU and resident-memory budget. N is an
+integer from 10 through 50 and defaults to 20. It is a percentage, not a Unix
+scheduler priority. Acquisition, resources, database maintenance, and standalone
+cleanup do not enable the governor. Linux with inspectable cgroup v2 is currently required for this budget; missing resource metrics fail closed.
+
+A lightweight governor thread samples available memory, process RSS, CPU capacity
+and cgroup v2 limits every 250 ms. CPU accounting covers all application threads.
+Shared token accounting throttles workers at cancellation-safe checkpoints; idle
+time cannot accumulate an unlimited CPU burst. The shared file pool and release
+scheduler both use the derived worker bound, and `--parallel` cannot override it.
+A four-core NAS at 20% targets 0.8 CPU cores averaged over time, normally with one
+release/file worker. Short bursts remain possible between cooperative checkpoints.
+
+RAM admission uses the lesser of budget headroom and current available memory,
+with a 128 MiB working reserve per admitted job and 64 MiB free-memory headroom.
+It reduces admission before starting more releases; active jobs are drained when
+necessary. If even one reserve cannot fit, processing stops early. The governor
+also requests an orderly stop if RSS reaches its budget or free memory falls
+below the headroom threshold. Sources and existing publications are retained.
+Resource failures do not increment the release's five-failure counter. Already
+finished publications are recorded before exit; resource stops skip automatic
+post-processing cleanup. Standalone `--cleanup` can be run later.
+
+Cgroup v2 CPU quotas and memory maxima, including ancestors, constrain effective
+capacity; reclaimable inactive file cache is included in cgroup memory headroom.
+N is applied to that effective capacity, including container limits. These are
+cooperative safeguards rather than hard enforcement. One native tag/decoder
+operation can allocate more memory or use extra CPU before reaching a checkpoint;
+the 128 MiB reserve is a scheduling estimate, not a maximum album working set.
+The governor does not kill unrelated processes or grant itself container privileges.
+
+For strict ceilings, set Docker/Compose `cpus`, `mem_limit`, and `pids_limit` to
+appropriate absolute values for the host. A kernel OOM kill can interrupt orderly
+cleanup, so allow working headroom. Resource thresholds do not repair faulty
+hardware or storage. On a resource stop, inspect the reported budget and available
+memory, free resources or reduce other workloads, then retry the retained sources.
+
+Readiness also runs `python3 scripts/test-processing-cli.py`: it publishes a
+synthetic FLAC through the real governor-enabled executable, then exercises
+standalone `--cleanup` with no external programs on the application's PATH.
+Fixture creation uses the existing test-only FFmpeg requirement.
+
+
+### Persistent stop-file requests
+
+All modes watch `<output>/.bcfunl-stop` by default. `--stopfile PATH` overrides
+that path; relative overrides resolve against the invocation's working directory.
+Use the same output or override for sequential calls. Startup checks happen
+before staging locks, database migrations, networking, governor startup, or output
+directory creation. The existing trigger causes a successful exit without work,
+so later calls in a shell sequence also skip while it remains. Help/version only
+print information and do not perform work.
+
+Runtime checks share the existing cancellation path and poll at most once per
+50 ms across worker threads. Detection latches for the current invocation, even
+if the file is subsequently removed. A filesystem entry, including a symlink,
+at the trigger path counts as a request. An inspection error other than missing
+file fails closed with exit code 1. A file stop exits 0; SIGINT/SIGTERM retain
+their existing signal exit codes. The application never deletes the trigger.
+
+Stop handling joins active workers, reaps transfer children, and preserves
+committed download/publication history and staged source payloads. It skips
+post-processing `--clean`. A cleanup job already in progress stops before further
+removals once detection occurs; it cannot undo earlier removals. Atomic operations
+already underway may finish before a checkpoint. Blocking filesystem/native
+library operations may delay detection until they return.
+
+Private partial downloads and temporary processing directories are discarded
+through normal safe shutdown. This is not a byte-level transfer or audio-frame
+checkpoint. After removing the trigger, rerun the command: completed entries are
+skipped through existing history/manifests and incomplete work is attempted again.
+Stop requests do not consume the genuine-failure parking budget. Keep the trigger
+present until every queued invocation has exited, then remove it to resume.
+
+
+### Stop current and subsequent scheduled calls
+
+The default trigger is inside the staging bind mount. On the NAS:
+
+```sh
+touch /mnt/backup/bcfstag4/.bcfunl-stop
+```
+
+Running jobs stop at safe checkpoints, and later `database`, `acquire`, `process`,
+and `cleanup` calls exit successfully without work while the file remains.
+To resume, remove that exact trigger after jobs have stopped:
+
+```sh
+rm /mnt/backup/bcfstag4/.bcfunl-stop
+```
+
+For another location set `BCFUNL_STOPFILE` in `.env`. It must be visible inside
+the container, preferably under an existing staging bind mount. The Compose
+entrypoint passes that override to every mode. Leave it empty for the default.
+Do not also pass `--stopfile` in extra arguments when the environment sets it.
+Completed history/source payloads remain; private temporary work is discarded,
+and incomplete items restart on the next invocation. No image update is needed
+to create/remove the trigger once the supporting image is deployed.

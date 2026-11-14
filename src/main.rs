@@ -4,6 +4,7 @@ mod availability;
 mod collection;
 mod database;
 mod db;
+mod discogs_identity;
 mod download;
 mod genres;
 mod limits;
@@ -94,6 +95,9 @@ struct Args {
     /// Tag and publish downloads, enriching from Discogs when credentials are configured
     #[arg(long)]
     process: bool,
+    /// Stop cleanly when this file exists (default: <output>/.bcfunl-stop)
+    #[arg(long)]
+    stopfile: Option<PathBuf>,
     /// Cooperative CPU/RAM processing budget as a percentage of effective capacity
     #[arg(long, default_value_t=20, value_parser=clap::value_parser!(u8).range(10..=50), requires="process")]
     nice: u8,
@@ -106,7 +110,7 @@ struct Args {
     /// Check collection history, retain seven verified backups, or restore the latest healthy backup
     #[arg(long, conflicts_with_all = ["process", "clean", "resources", "artist", "fromdt", "todt", "count", "parallel", "force", "summary"])]
     database: bool,
-    /// Acquire/import current Discogs artists and masters snapshots into resources/library.sqlite3
+    /// Acquire/import current Discogs artists, masters, and full releases snapshots into resources/library.sqlite3
     #[arg(long, conflicts_with_all = ["process", "clean", "artist", "fromdt", "todt", "count", "parallel", "serverdir", "template", "varioustag"])]
     resources: bool,
     /// Import an existing Discogs artists XML or XML.gz instead of downloading
@@ -115,10 +119,13 @@ struct Args {
     /// Import an existing Discogs masters XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
     master_file: Option<PathBuf>,
+    /// Import an existing Discogs releases XML or XML.gz instead of downloading
+    #[arg(long, requires = "resources")]
+    release_file: Option<PathBuf>,
     /// Destination music library for --process
     #[arg(long, requires = "process", required_if_eq("process", "true"))]
     serverdir: Option<PathBuf>,
-    /// Discogs research SQLite library for --offline missing-genre fallback (default: <output>/resources/library.sqlite3)
+    /// Discogs research SQLite library for local release matching and offline genre fallback (default: <output>/resources/library.sqlite3)
     #[arg(long, requires = "process")]
     library: Option<PathBuf>,
     /// Relative output naming rule; the audio extension is appended
@@ -586,6 +593,7 @@ fn process_parallel<P: Send>(
 }
 
 fn run(args: Args) -> Result<()> {
+    shutdown::check()?;
     let started = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     args.validate()?;
     if args.database {
@@ -665,11 +673,15 @@ fn run(args: Args) -> Result<()> {
 }
 fn main() {
     let args = Args::parse();
-    let result = shutdown::install().and_then(|()| run(args));
+    let stopfile = args
+        .stopfile
+        .clone()
+        .unwrap_or_else(|| args.output.join(".bcfunl-stop"));
+    let result = shutdown::install()
+        .and_then(|()| shutdown::watch_file(stopfile))
+        .and_then(|()| run(args));
     if shutdown::requested() {
-        eprintln!(
-            "Termination complete; active transfers cleaned up and committed history preserved."
-        );
+        eprintln!("Stop request complete; staged sources and committed history preserved.");
         if let Err(error) = result {
             eprintln!("Stopped: {error:#}");
         }

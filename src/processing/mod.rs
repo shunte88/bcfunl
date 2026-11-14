@@ -938,7 +938,13 @@ fn process_one(
     timing.next("read_tags");
     let mut tracks = tracks(&paths)?;
     timing.next("discogs_lookup");
-    let matched = if let Some(lookup) = lookup {
+    let local_match = library
+        .map(|library| library.find(release, &tracks))
+        .transpose()?
+        .flatten();
+    let matched = if local_match.is_some() {
+        local_match
+    } else if let Some(lookup) = lookup {
         match lookup.find(release, &tracks) {
             Ok(found) => found,
             Err(error) if shutdown::requested() => return Err(error),
@@ -997,6 +1003,7 @@ fn process_one(
     }
     timing.next("genre_fallback");
     if matched.is_none()
+        && args.offline
         && let Some(library) = library
     {
         plan.genre_fallback = library.apply(&plan.artist, &mut tracks)?;
@@ -1252,7 +1259,7 @@ pub fn run(args: &Args) -> Result<()> {
     };
     if !args.offline && lookup.is_none() {
         eprintln!(
-            "Discogs lookup unavailable: set DISCOGS_TOKEN or VCW_DISCOGS_TOKEN; retaining only recognized genres"
+            "Discogs API unavailable: set DISCOGS_TOKEN or VCW_DISCOGS_TOKEN; local library matching remains available"
         );
     }
     let mut rows = processing_rows(&db, args)?;
@@ -1298,7 +1305,7 @@ pub fn run(args: &Args) -> Result<()> {
                             &input,
                             &server,
                             &template,
-                            library.as_ref().filter(|_| args.offline),
+                            library.as_ref(),
                             lookup.as_ref(),
                             args,
                         )
@@ -1443,7 +1450,7 @@ pub fn run(args: &Args) -> Result<()> {
                         input,
                         server,
                         template,
-                        library.as_ref().filter(|_| args.offline),
+                        library.as_ref(),
                         lookup,
                         args,
                     )

@@ -25,6 +25,25 @@ impl Library {
         db.query("SELECT a.id,g.genre,g.master_count FROM artists a JOIN artist_genres g ON a.id=g.artist_id LIMIT 0", &[])?;
         Ok(Self { db, source })
     }
+    pub(super) fn find(
+        &self,
+        release: &super::Release,
+        tracks: &[Track],
+    ) -> Result<Option<super::discogs::Match>> {
+        let rows = self.db.query(
+            "SELECT source_file,source_sha256 FROM resource_import WHERE dataset='releases'",
+            &[],
+        )?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        super::discogs::find_local(
+            &self.db,
+            release,
+            tracks,
+            json!({"dataset":"discogs-releases","file":row[0],"sha256":row[1]}),
+        )
+    }
     pub(super) fn apply(&self, artist: &str, tracks: &mut [Track]) -> Result<Option<Value>> {
         if !tracks
             .iter()

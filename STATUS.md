@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-11-12 (America/New_York)
-Local release: **v0.1.53**, standalone cleanup and cooperative processing governor; container/NAS acceptance pending
+Updated: 2026-11-14 (America/New_York)
+Local release: **v0.1.55**, full local Discogs release matching; Docker/full-import acceptance pending
 
 ## Current outcome
 
@@ -2743,3 +2743,130 @@ isolated rerun and subsequent complete suites passed. No production lock changes
 made. If repeated, investigate inherited-lock lifetime around concurrent test
 FFmpeg forks rather than deleting lock files. No live NAS data writes, job stops,
 commit/push/deploy, source-binary patching or cloud changes.
+
+
+### Stand-down, 2026-11-12
+
+Stue acknowledged v0.1.53 and requested memory/status before standing down.
+Both files are current. Next session: complete the host Docker readiness gate,
+build/deploy the image, merge cleanup mode and BCFUNL_NICE into the NAS custom
+bcfunl4 Compose configuration, and test standalone cleanup plus a small governed
+processing batch. Native tests/build and CLI smoke passed; full Docker/NAS
+acceptance and live resource-pressure behavior remain pending. Budgets are
+cooperative, with hard ceilings requiring container/kernel limits. Leave existing
+NAS jobs and data unchanged until Stue resumes deployment/testing.
+
+
+## 2026-11-14: v0.1.54 persistent stop-file trigger
+
+Stue requested a specified trigger file that cleanly stops the active step and
+causes subsequent sequential invocations to exit while the file remains. Preserve
+environment/history, skip payload cleanup; exact resume optional if expensive.
+Reused existing safe cancellation rather than adding byte/frame checkpoints.
+
+New global --stopfile PATH; default <output>/.bcfunl-stop for every mode. Main
+configures an absolute path before run, and run immediately checks shutdown before
+validation, directory/lock creation, database migrations, networking or governor
+startup. Help/version still print only information. Existing trigger -> successful
+exit0 with path in stop message. Trigger is NEVER consumed. Removing after jobs
+stop permits subsequent invocations to proceed. Use same output or custom path
+for a sequence. No SQL schema change or new runtime dependency.
+
+shutdown::requested shares presence checks across all workers at most once per
+50ms via atomic polling deadline. Presence (including symlink/directory entry)
+latches stop for the current invocation. Missing file is normal; other stat errors
+fail closed and exit1. SIGINT/SIGTERM retain existing128+signal exit codes. Async
+requests, sleeps, transfer children, CPU governor and file/decode workers reuse
+existing stop checkpoints. Stop may wait for blocking/native operations or atomic
+steps already underway. Completed publications/history are recorded. --process
+--clean skips payload cleanup on detected stop; already-running standalone cleanup
+stops further removals but cannot undo removals completed before detection.
+
+Private partial transfers and temporary process work are still safely discarded
+and child processes reaped. This is intentionally not exact byte/frame resume:
+completed entries skip on rerun; unfinished items restart under existing history.
+Explicitly explained this boundary to Stue. Stops do not consume genuine-failure
+parking budgets. No live jobs, NAS data, or trigger files were changed by agent.
+
+Compose optional BCFUNL_STOPFILE (blank uses native default) prepends the override
+centrally for database/acquire/process/cleanup. Override must be visible inside
+a mounted path. Do not also supply duplicate --stopfile extra args when env sets
+it. .env.example, README and reference/container docs updated. A large concurrent
+user rewrite of docs/CONTAINERS.md appeared during work; retained it, appended
+our section, and removed one trailing space flagged by diff-check. No unrelated
+content was reverted.
+
+Validation166passed,0failed,5ignored; locked strict Clippy, fmt, locked release
+build, workflow-regression, Compose dummy-env config and diff checks passed.
+Existing shutdown subprocess matrix now tests stop-file requests in six modes
+(pause/save/aria2/async/parallel/processing) in addition to SIGINT/SIGTERM: exit0,
+trigger retained, prior completion intact, unfinished row not falsely complete,
+SQLite integrity and child reaping verified. Real CLI smoke extended to ensure
+acquire/database/resources/process/cleanup skip at startup, a custom trigger
+prevents even output-directory creation, inaccessible/malformed trigger paths
+exit1, removing trigger enables verified standalone cleanup, and no external
+programs on application PATH are needed. Missing cookies/resource fixture paths
+prevent accidental networking in startup regression tests.
+Binary0.1.54 built2026-11-14T19:53:02Z. Actual check-build.sh attempted: Docker
+daemon access remains blocked in agent session; full image/package gate and NAS
+stop-file acceptance pending. No commit/push/deploy or application binary patch.
+
+## 2026-11-14 handoff: v0.1.55 full Discogs release library
+
+Stue reports moving runtime back to media2026 because the NAS backup drive was
+showing many storage errors. The new stage path was not supplied. No runtime
+jobs, remote files, or deployed containers were changed in this session.
+
+`--resources` now fetches artists, masters, AND detailed releases for the current
+UTC month. Retain masters for canonical grouping and distinct-master artist
+genre evidence, avoiding pressing-count bias. `--release-file` accepts existing
+XML/gzip; supply it alongside --resource-file and --master-file for fully local
+imports. Existing master-only libraries remain usable until rebuilt.
+
+Detailed releases stream one XML record at a time into indexed releases and
+release_artists tables. Full record JSON retains catalogs/labels, country/date,
+genres/styles, credits, formats, tracklists and additional XML fields/attributes.
+Provenance stores all three source hashes. Gzip/manifest verification, private
+staged rebuild, integrity check, cancellation and atomic replacement remain.
+Full dumps were not downloaded/imported during development; allow disk space
+for archives plus old/new databases and validate import time/size on media2026.
+
+Processing now queries the local title index first, loading one candidate body
+at a time and reusing the online artist/title/country matching and genre
+sanitizer. Deterministic first eligible release ID supplies catalog, label,
+genres/styles and record-wide performer/composer/conductor credits. Complete
+tracklists are retained for research; existing source track-credit handling
+remains. Each release worker opens a read-only SQLite connection. Local matching
+has no API pacing; the cooperative CPU/RAM governor remains. API fallback stays
+rate-limited unless --offline disables it. Artist-default genre fallback retains
+its existing offline-only behavior. Shared title identity moved into
+src/discogs_identity.rs so import keys and online/local comparisons stay aligned.
+
+Prior v0.1.54 persistent stop-file implementation remains included. Version
+bumped to v0.1.55, built 2026-11-14T20:17:10Z. Locked offline tests: 168 passed,
+0 failed, 5 ignored. Formatting, Clippy with denied warnings, locked optimized
+build, build-workflow regression, and actual CLI smoke test passed. CLI test
+uses local release SQLite matching, --offline and PATH=/nonexistent, confirms
+catalog publication, governor, stop-file startup paths and standalone cleanup.
+Import fixtures cover plain/gzip, preserved nested metadata, provenance,
+idempotence and failed rebuild retaining old library. Local matching covers
+country rejection/composite acceptance, artist asterisk, remaster title,
+genre expansion and scoped credits.
+
+Actual `sh scripts/check-build.sh` was attempted and stopped at unavailable
+Docker daemon access. Container/package gates and full monthly import/runtime
+acceptance are NOT complete. No commit or push performed. Preserve Stue's
+concurrent extensive docs/CONTAINERS.md rewrite.
+
+## 2026-11-14 documentation follow-up
+
+README updated with beginner-friendly local Discogs setup and processing examples,
+--offline, --library, optional API fallback, monthly refresh, existing-library
+compatibility, and keeping staged downloads until cleanup is requested. Project
+art/heading preserved. Simplified resource-budget and installation explanations,
+removed technical material trailing the license, and corrected outdated preorder
+summary. Documentation defaults now recorded in AGENTS.md: US English, no em or
+en dashes, friendly minimally technical explanations in the spirit of For Dummies,
+short practical examples, implementation details in the reference guide.
+Markdown fences, local links, punctuation preferences and git diff whitespace
+checked. Documentation-only change; no new runtime/build tests or version bump.

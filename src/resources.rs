@@ -1,4 +1,4 @@
-//! Discogs monthly artist identity snapshots, separate from collection history.
+//! Monthly Discogs artists, masters, and detailed releases, separate from history.
 use crate::{Args, db::Database, processing::tempfile, shutdown};
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{Datelike, NaiveDate, Utc};
@@ -173,6 +173,8 @@ fn schema(db: &Database) -> Result<()> {
         "CREATE TABLE masters(id INTEGER PRIMARY KEY CHECK(id>0),title TEXT NOT NULL,main_release_id INTEGER,year INTEGER,data_quality TEXT,genres TEXT NOT NULL,styles TEXT NOT NULL)",
         "CREATE TABLE master_artists(master_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,join_text TEXT,PRIMARY KEY(master_id,position))",
         "CREATE TABLE artist_genres(artist_id INTEGER NOT NULL,genre TEXT COLLATE NOCASE NOT NULL,master_count INTEGER NOT NULL,PRIMARY KEY(artist_id,genre)) WITHOUT ROWID",
+        "CREATE TABLE releases(id INTEGER PRIMARY KEY CHECK(id>0),master_id INTEGER,title TEXT NOT NULL,title_key TEXT NOT NULL,country TEXT,released TEXT,data TEXT NOT NULL)",
+        "CREATE TABLE release_artists(release_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,PRIMARY KEY(release_id,position))",
         "CREATE TABLE resource_import(dataset TEXT PRIMARY KEY,source_file TEXT NOT NULL,source_sha256 TEXT NOT NULL,imported_at TEXT NOT NULL,record_count INTEGER NOT NULL,field_counts TEXT NOT NULL)",
     ] {
         db.query(sql, &[])?;
@@ -208,6 +210,100 @@ fn save_artist(db: &Database, artist: &Frame) -> Result<()> {
     db.query("INSERT INTO artists(id,name,real_name,profile,data_quality,urls,name_variations,aliases,members,groups) VALUES(?,?,NULLIF(?,''),NULLIF(?,''),NULLIF(?,''),?,?,?,?,?)", &[id,artist.text("name"),artist.text("realname"),artist.text("profile"),artist.text("data_quality"),&list("urls"),&list("namevariations"),&list("aliases"),&list("members"),&list("groups")])?;
     Ok(())
 }
+fn xml_value(frame: &Frame) -> Value {
+    if frame.children.is_empty() && frame.attributes.is_empty() {
+        return Value::String(frame.text.clone());
+    }
+    let mut object = frame.attributes.clone();
+    if !frame.text.trim().is_empty() {
+        object.insert("value".into(), json!(frame.text));
+    }
+    for child in &frame.children {
+        let value = if matches!(
+            child.name.as_str(),
+            "artists"
+                | "extraartists"
+                | "labels"
+                | "genres"
+                | "styles"
+                | "formats"
+                | "tracklist"
+                | "images"
+                | "identifiers"
+                | "companies"
+                | "urls"
+                | "videos"
+                | "descriptions"
+                | "sub_tracks"
+        ) {
+            Value::Array(child.children.iter().map(xml_value).collect())
+        } else {
+            xml_value(child)
+        };
+        if let Some(previous) = object.remove(&child.name) {
+            object.insert(child.name.clone(), json!([previous, value]));
+        } else {
+            object.insert(child.name.clone(), value);
+        }
+    }
+    Value::Object(object)
+}
+fn save_release(db: &Database, release: &Frame) -> Result<()> {
+    let id = release
+        .attributes
+        .get("id")
+        .and_then(Value::as_str)
+        .context("Missing release ID")?;
+    ensure!(id.parse::<u64>().is_ok_and(|v| v > 0), "Invalid release ID");
+    let body = xml_value(release);
+    db.query(
+        "INSERT INTO releases VALUES(?,NULLIF(?,''),?,?,NULLIF(?,''),NULLIF(?,''),?)",
+        &[
+            id,
+            release.text("master_id"),
+            release.text("title"),
+            &crate::discogs_identity::title_key(release.text("title")),
+            release.text("country"),
+            release.text("released"),
+            &body.to_string(),
+        ],
+    )?;
+    for (position, artist) in release.items("artists").iter().enumerate() {
+        let artist_id = artist.text("id");
+        let artist_id = if artist_id.parse::<u64>().is_ok_and(|v| v > 0) {
+            artist_id
+        } else {
+            ""
+        };
+        db.query(
+            "INSERT INTO release_artists VALUES(?,NULLIF(?,''),?,?,NULLIF(?,''))",
+            &[
+                id,
+                artist_id,
+                &position.to_string(),
+                artist.text("name"),
+                artist.text("anv"),
+            ],
+        )?;
+    }
+    Ok(())
+}
+fn import_releases(path: &Path, db: &Database) -> Result<(u64, BTreeMap<String, u64>)> {
+    let mut file = File::open(path)?;
+    let mut magic = [0; 2];
+    let count = file.read(&mut magic)?;
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0))?;
+    let reader: Box<dyn BufRead> = if count == 2 && magic == [0x1f, 0x8b] {
+        Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+    stream(reader, "releases", "release", |record| {
+        save_release(db, record)
+    })
+}
+
 fn save_master(db: &Database, master: &Frame, map: &vcw_metadata::Genres) -> Result<()> {
     let id = master
         .attributes
@@ -393,19 +489,30 @@ fn import_source(
     }
 }
 
-fn build(
+fn build_full(
     source: &Path,
     masters: &Path,
     target: &Path,
     temporary: &Path,
+    releases: Option<&Path>,
     force: bool,
 ) -> Result<(u64, u64)> {
     let hash = sha256(source)?;
     let master_hash = sha256(masters)?;
+    let release_hash = releases.map(sha256).transpose()?;
     if target.is_file() && !force {
         let db = Database::connect(target.to_str().context("Library path is not UTF-8")?)?;
         let rows=db.query("SELECT record_count FROM resource_import WHERE dataset='artists' AND source_sha256=? AND EXISTS(SELECT 1 FROM resource_import WHERE dataset='masters' AND source_sha256=?)",&[&hash,&master_hash])?;
-        if let Some(row) = rows.first() {
+        let releases_current = match &release_hash {
+            Some(hash) => !db
+                .query(
+                    "SELECT 1 FROM resource_import WHERE dataset='releases' AND source_sha256=?",
+                    &[hash],
+                )?
+                .is_empty(),
+            None => true,
+        };
+        if let Some(row) = rows.first().filter(|_| releases_current) {
             eprintln!("Library already contains these snapshots");
             let n = db.query(
                 "SELECT record_count FROM resource_import WHERE dataset='masters'",
@@ -444,6 +551,20 @@ fn build(
         )?;
         counts.insert(kind, count);
     }
+    if let Some(path) = releases {
+        eprintln!("Importing detailed releases from {}", path.display());
+        let (count, fields) = import_releases(path, &db)?;
+        db.query(
+            "INSERT INTO resource_import VALUES('releases',?,?,?,?,?)",
+            &[
+                &path.file_name().unwrap_or_default().to_string_lossy(),
+                release_hash.as_deref().unwrap(),
+                &Utc::now().to_rfc3339(),
+                &count.to_string(),
+                &json!(fields).to_string(),
+            ],
+        )?;
+    }
     eprintln!("Building artist genre defaults and indexes");
     db.query("UPDATE artists SET genres=(SELECT json_group_array(genre) FROM (SELECT genre FROM artist_genres WHERE artist_id=artists.id ORDER BY master_count DESC,genre COLLATE NOCASE)) WHERE EXISTS(SELECT 1 FROM artist_genres WHERE artist_id=artists.id)",&[])?;
     db.query("COMMIT", &[])?;
@@ -452,6 +573,9 @@ fn build(
         "CREATE INDEX artists_real_name ON artists(real_name COLLATE NOCASE) WHERE real_name IS NOT NULL",
         "CREATE INDEX master_artist_lookup ON master_artists(artist_id,master_id)",
         "CREATE INDEX masters_title ON masters(title COLLATE NOCASE)",
+        "CREATE INDEX releases_title_key ON releases(title_key,id)",
+        "CREATE INDEX releases_master ON releases(master_id,id)",
+        "CREATE INDEX release_artist_lookup ON release_artists(artist_id,release_id)",
     ] {
         db.query(sql, &[])?;
     }
@@ -465,6 +589,16 @@ fn build(
     fs::rename(&staged, target)?;
     File::open(target.parent().unwrap())?.sync_all()?;
     Ok((counts["artists"], counts["masters"]))
+}
+#[cfg(test)]
+fn build(
+    source: &Path,
+    masters: &Path,
+    target: &Path,
+    temporary: &Path,
+    force: bool,
+) -> Result<(u64, u64)> {
+    build_full(source, masters, target, temporary, None, force)
 }
 pub fn run(args: &Args) -> Result<()> {
     let root = args.output.join("resources");
@@ -492,16 +626,29 @@ pub fn run(args: &Args) -> Result<()> {
             runtime.block_on(shutdown::until(acquire(&root, temporary.path(), "masters")))??
         }
     };
-    let (artists, masters) = build(
+    let releases = match &args.release_file {
+        Some(path) => path.clone(),
+        None => runtime.block_on(shutdown::until(acquire(
+            &root,
+            temporary.path(),
+            "releases",
+        )))??,
+    };
+    let (artists, masters) = build_full(
         &source,
         &masters,
         &root.join("library.sqlite3"),
         temporary.path(),
+        Some(&releases),
         args.force,
     )?;
     eprintln!(
         "Library ready: {} ({artists} artists, {masters} masters)",
         root.join("library.sqlite3").display()
+    );
+    eprintln!(
+        "Detailed release matching enabled from {}",
+        releases.display()
     );
     eprintln!(
         "Artist genres are master-derived fallback evidence, not recording-specific classifications."
@@ -515,6 +662,75 @@ mod tests {
     use clap::Parser;
     const MASTERS: &str = r#"<masters><master id="10"><main_release>100</main_release><artists><artist><id>1</id><name>A &amp; B</name></artist></artists><genres><genre>Electronic</genre></genres><styles><style>Acid House</style></styles><year>2026</year><title>Proof</title></master></masters>"#;
     const XML: &str = r#"<artists><artist><id>1</id><name>A &amp; B</name><realname>Real Name</realname><profile><![CDATA[Not a genre: jazz & folk]]></profile><data_quality>Correct</data_quality><urls><url>https://example.org</url></urls><namevariations><name>A and B</name></namevariations><aliases><name id="22">Alias</name></aliases><members><id>33</id><name id="44" active="false">Former</name></members><groups><name id="55">Group</name></groups></artist><artist><id>2</id><data_quality>Needs Vote</data_quality></artist></artists>"#;
+    const RELEASES: &str = r#"<releases><release id="100" status="Accepted"><title>Proof (2026 Remaster)</title><master_id is_main_release="true">10</master_id><artists><artist><id>1</id><name>A &amp; B</name><anv>A and B</anv></artist></artists><country>Worldwide</country><released>2026-01-01</released><labels><label name="Fixture" catno="ABC-1"/></labels><genres><genre>Electronic</genre></genres><styles><style>Ambient</style></styles><extraartists><artist><name>Composer One</name><role>Composed By</role><tracks/></artist></extraartists><tracklist><track><position>A1</position><title>Track</title><artists><artist><name>Track Artist</name></artist></artists></track></tracklist><notes>Retain notes</notes></release></releases>"#;
+    #[test]
+    fn detailed_releases_preserve_metadata_match_offline_and_rebuild_safely() {
+        let root = tempfile::tempdir().unwrap();
+        let artists = root.path().join("artists.xml");
+        let masters = root.path().join("masters.xml");
+        let releases = root.path().join("releases.xml.gz");
+        let target = root.path().join("library.sqlite3");
+        fs::write(&artists, XML).unwrap();
+        fs::write(&masters, MASTERS).unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(RELEASES.as_bytes()).unwrap();
+        fs::write(&releases, encoder.finish().unwrap()).unwrap();
+        let work = tempfile::tempdir_in(root.path()).unwrap();
+        build_full(
+            &artists,
+            &masters,
+            &target,
+            work.path(),
+            Some(&releases),
+            false,
+        )
+        .unwrap();
+        let before = fs::read(&target).unwrap();
+        let db = Database::read_only(target.to_str().unwrap()).unwrap();
+        let rows = db
+            .query(
+                "SELECT master_id,title_key,data FROM releases WHERE id=100",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(rows[0][0].as_deref(), Some("10"));
+        assert_eq!(rows[0][1].as_deref(), Some("proof"));
+        let body: Value = serde_json::from_str(rows[0][2].as_deref().unwrap()).unwrap();
+        assert_eq!(body["labels"][0]["catno"], "ABC-1");
+        assert_eq!(body["tracklist"][0]["artists"][0]["name"], "Track Artist");
+        assert_eq!(body["notes"], "Retain notes");
+        assert_eq!(body["master_id"]["value"], "10");
+        assert_eq!(
+            db.query("SELECT artist_id,anv FROM release_artists", &[])
+                .unwrap()[0],
+            [Some("1".into()), Some("A and B".into())]
+        );
+        drop(db);
+        let work = tempfile::tempdir_in(root.path()).unwrap();
+        build_full(
+            &artists,
+            &masters,
+            &target,
+            work.path(),
+            Some(&releases),
+            false,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), before);
+        fs::write(&releases, r#"<releases><release id="100">"#).unwrap();
+        assert!(
+            build_full(
+                &artists,
+                &masters,
+                &target,
+                work.path(),
+                Some(&releases),
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&target).unwrap(), before);
+    }
     #[test]
     fn latest_month_and_checksums_use_only_official_expected_files() {
         let html = r#"<a href="?download=data%2F2026%2Fdiscogs_20261001_artists.xml.gz">one</a><a href="?download=data%2F2026%2Fdiscogs_20261015_artists.xml.gz">latest</a><a href="?download=data%2F2026%2Fdiscogs_20261031_artists.xml.gz">future</a><a href="?download=data%2F2026%2Fdiscogs_20261001_releases.xml.gz">release</a><a href="https://evil.org/?download=data%2F2026%2Fdiscogs_20261025_artists.xml.gz">bad</a>"#;
@@ -554,11 +770,7 @@ mod tests {
         assert_eq!(members[1]["active"], "false");
         assert_eq!(row[5], None);
         assert_eq!(row[6], None);
-        assert!(
-            db.query("SELECT name FROM sqlite_master WHERE name='releases'", &[])
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db.query("SELECT id FROM releases", &[]).unwrap().is_empty());
     }
     #[test]
     fn staged_rebuild_is_atomic_idempotent_and_checks_gzip_crc() {
@@ -642,9 +854,13 @@ mod tests {
         fs::write(&source, XML).unwrap();
         let masters = root.path().join("masters.xml");
         fs::write(&masters, MASTERS).unwrap();
+        let releases = root.path().join("releases.xml");
+        fs::write(&releases, RELEASES).unwrap();
         let args = Args::try_parse_from([
             "bcfunl",
             "--resources",
+            "--release-file",
+            releases.to_str().unwrap(),
             "--master-file",
             masters.to_str().unwrap(),
             "--resource-file",

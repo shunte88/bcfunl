@@ -69,6 +69,7 @@ Options:
 | `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
 | `--offline` | Disable Discogs network requests during processing. |
 | `--database` | Check collection history, retain seven verified backups, or restore the latest healthy backup. Standalone with `--output`. |
+| `--stopfile` | Stop trigger path, default `<output>/.bcfunl-stop`. Applies to every mode at startup and runtime; trigger remains until removed. |
 | `--nice` | Linux processing CPU/RAM budget, 10..50%, default 20. Cooperative governor; `--parallel` remains an upper bound. |
 | `--cleanup` | Alias for standalone `--clean`; reuses verified cleanup and the staging lock. |
 | `--clean` | Remove successfully processed staged payloads, standalone or after `--process`. Preserves history and published files. |
@@ -502,22 +503,23 @@ or Cargo manifests/lockfile change.
 ## Monthly Discogs research resources
 
 ```sh
-# Discover the latest artists and masters snapshots in the current UTC month,
+# Discover the latest artists, masters, and full releases snapshots in the current UTC month,
 # download using the official Discogs links, verify SHA-256, and rebuild SQLite.
 ./target/release/bcfunl --resources --output ./downloads
 
 # Reuse existing XML or gzip snapshots, without network requests.
 ./target/release/bcfunl --resources --output ./downloads \
   --resource-file /data2/discogs_20261001_artists.xml \
-  --master-file ./downloads/resources/discogs_20261001_masters.xml.gz
+  --master-file ./downloads/resources/discogs_20261001_masters.xml.gz \
+  --release-file ./downloads/resources/discogs_20261001_releases.xml.gz
 ```
 
 The database is `<output>/resources/library.sqlite3`, separate from collection
 history. `--resource-file` overrides the artists input; `--master-file` overrides
-the masters input. Either override may be omitted to acquire that dataset online.
+the masters input; `--release-file` overrides detailed releases. Any omitted input is acquired online. Supply all three for a fully local import.
 Neither cookies nor artist-map loading is needed. Resources cannot be combined
 with `--process`, artist/date/count filters, parallel downloads or server/template
-options. `--force` rebuilds even when both source hashes are unchanged.
+options. `--force` rebuilds even when all source hashes are unchanged.
 
 The official listing is `https://data.discogs.com/?prefix=data%2F2026%2F` for 2026;
 the year and current UTC month are determined at runtime. File links use the
@@ -540,6 +542,8 @@ Allow space for cached archives plus old and newly built databases during refres
 | --- | --- |
 | `artists` | Discogs ID, exact name, real name, profile, quality; JSON URLs, name variations, aliases, members and groups, including relationship IDs/attributes |
 | `masters` | Master ID, title, main release ID, year, quality, original genre/style JSON arrays |
+| `releases` | Release ID, master ID, title/search key, country, released date, complete record JSON |
+| `release_artists` | Ordered release artist IDs, names, and alternate names |
 | `master_artists` | Ordered master credits, artist IDs, source names, name variations and join text |
 | `artist_genres` | Normalized combined genre/style value and supporting distinct-master count for each artist ID |
 | `artists.genres` | Default combined genre collection, ranked by supporting master count then name |
@@ -1178,3 +1182,56 @@ Readiness also runs `python3 scripts/test-processing-cli.py`: it publishes a
 synthetic FLAC through the real governor-enabled executable, then exercises
 standalone `--cleanup` with no external programs on the application's PATH.
 Fixture creation uses the existing test-only FFmpeg requirement.
+
+
+### Persistent stop-file requests
+
+All modes watch `<output>/.bcfunl-stop` by default. `--stopfile PATH` overrides
+that path; relative overrides resolve against the invocation's working directory.
+Use the same output or override for sequential calls. Startup checks happen
+before staging locks, database migrations, networking, governor startup, or output
+directory creation. The existing trigger causes a successful exit without work,
+so later calls in a shell sequence also skip while it remains. Help/version only
+print information and do not perform work.
+
+Runtime checks share the existing cancellation path and poll at most once per
+50 ms across worker threads. Detection latches for the current invocation, even
+if the file is subsequently removed. A filesystem entry, including a symlink,
+at the trigger path counts as a request. An inspection error other than missing
+file fails closed with exit code 1. A file stop exits 0; SIGINT/SIGTERM retain
+their existing signal exit codes. The application never deletes the trigger.
+
+Stop handling joins active workers, reaps transfer children, and preserves
+committed download/publication history and staged source payloads. It skips
+post-processing `--clean`. A cleanup job already in progress stops before further
+removals once detection occurs; it cannot undo earlier removals. Atomic operations
+already underway may finish before a checkpoint. Blocking filesystem/native
+library operations may delay detection until they return.
+
+Private partial downloads and temporary processing directories are discarded
+through normal safe shutdown. This is not a byte-level transfer or audio-frame
+checkpoint. After removing the trigger, rerun the command: completed entries are
+skipped through existing history/manifests and incomplete work is attempted again.
+Stop requests do not consume the genuine-failure parking budget. Keep the trigger
+present until every queued invocation has exited, then remove it to resume.
+
+### Local release matching
+
+Processing checks the local detailed-release title index first, using the same
+artist, title, and country rules as the Discogs API. Worldwide and composite
+countries follow the existing matching rules. The first eligible release by ID
+supplies catalog, label, genres/styles, and album-level performer, composer, and
+conductor credits. Genres pass through the shared sanitizer. Unmatched releases
+can fall back to the API unless `--offline` is set. Local SQLite lookups have no
+network rate limiter; the processing resource governor still applies.
+
+The library includes `releases` (ID, master ID, title/search key, country, release
+date, complete record JSON) and `release_artists` (ordered IDs, names, alternate
+names), with title, master, and artist indexes. Tracklists, formats, credits, and
+other XML fields are retained in JSON. Masters remain necessary for canonical
+grouping and artist genre defaults counted once per master, rather than once
+per pressing. Existing master-only libraries still work; run `--resources` to
+add full release matching. Each release-processing worker opens its own read-only
+connection. A monthly rebuild streams records and replaces the library only
+after successful validation. Full release extracts and the resulting database
+need substantially more disk space than masters alone.

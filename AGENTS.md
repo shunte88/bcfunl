@@ -55,7 +55,12 @@ README documents system dependencies and the sibling VCW build dependency.
 
 ## Documentation Preferences
 
-Use US English spelling and do not use em dashes in documentation or replies.
+Use US English spelling. Do not use em dashes or en dashes in documentation or replies.
+
+Default documentation style: friendly, beginner-friendly, and minimally technical,
+in the spirit of the For Dummies books. Explain what to do and why in plain
+language, with short steps and practical examples. Keep implementation details
+in the reference guide. Preserve the README project art and heading.
 
 Use `johnsmith` as the collection owner in all documentation, sample commands,
 and deployment guides. Do not use Stue's real collection username in examples,

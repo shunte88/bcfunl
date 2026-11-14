@@ -11,22 +11,19 @@ of what is complete.
 
 - **Repeatable collection downloads.** SQLite history tracks successes and failures so later runs can focus on unfinished purchases.
 - **A verified music library.** Clean up tags and filenames, preserve artwork, and verify decoded audio before publishing releases.
-- **Parallel downloads and processing.** Run 2–8 releases at a time.
+- **Parallel downloads and processing.** Run 2 to 8 releases at a time.
 - **Better metadata.** Apply artist mappings, extract catalog numbers, filter invalid genre tags, and prefer confirmed Discogs release genres/styles.
 - **Scheduled maintenance.** Acquire, process, and clean successful downloads in one serialized workflow.
 
 ## Overview
 
-bcfunl is a Rust command-line tool for maintaining a local copy of an authenticated
-Bandcamp collection. It downloads owned releases into staging, then processes
-completed downloads into a separate music library without audio transcoding.
-Download and processing history are tracked separately, making retries and regular
-maintenance practical.
+Think of bcfunl as two steps: download your purchases into a staging folder, then
+sort and tag them into your music folder. Your audio stays in its original format.
+bcfunl remembers completed work, so you can run it again without starting over.
 
-Use it interactively for a few releases or schedule it after the initial
-collection has been downloaded. Processing uses Discogs release metadata when a token is configured, requiring
-matching artist, title, and country (Discogs Worldwide matches any country). Use `--offline` to avoid network lookups;
-monthly artist/master extracts remain an optional offline genre fallback.
+For better tags, build a local Discogs library. Processing checks it first for
+matching releases and can fill in catalog numbers, labels, genres, and credits.
+You can work entirely offline or let the Discogs API help with missing matches.
 
 ## Quick start
 
@@ -90,35 +87,82 @@ tagging, and publication time is spent.
 
 ### Limit processing resource use
 
-Processing defaults to `--nice 20`, a cooperative CPU/RAM budget of 20% of
-available CPU capacity and total RAM, constrained by readable cgroup v2 limits:
+Want to leave some breathing room for other jobs? Processing uses a 20% resource
+budget by default. Set `--nice` to a value from 10 to 50 to change it:
 
 ```sh
 ./bcfunl --process --nice 20 --parallel 8 --user johnsmith \
   --output ./downloads --serverdir /music --summary
 ```
 
-Choose 10 through 50 percent. A governor samples resources every 250 ms,
-reduces worker admission under pressure, and stops safely if it cannot continue.
-`--parallel` is an upper bound, not a promise to start that many jobs. Sources
-are retained on a resource stop, which does not count as a bad-release failure.
-Budget support currently requires Linux. The percentage is not Unix nice priority.
+bcfunl slows down when resources are tight and stops safely if it cannot continue.
+Your source files stay put. `--parallel 8` allows up to eight releases at once;
+fewer may run when the machine is busy. These controls require Linux and allow
+brief spikes. For firm limits, also set CPU and memory limits in your container.
 
-These are cooperative controls, not hard CPU/RAM guarantees. Native library
-operations can briefly exceed a budget before their next safe checkpoint.
-Use Docker CPU, memory, and PID limits for kernel-enforced ceilings. The budget
-is calculated within those container limits, so combining them is conservative.
+### Stop a sequence cleanly
 
-### Fill missing genres
+Every invocation checks `<output>/.bcfunl-stop` at startup and while running.
+Create the trigger to stop active work and make later calls skip their steps:
+
+```sh
+touch ./downloads/.bcfunl-stop
+```
+
+The trigger is never consumed. Remove it when you are ready to resume:
+
+```sh
+rm ./downloads/.bcfunl-stop
+```
+
+Use `--stopfile /shared/bcfunl.stop` on each call to share another path. Completed
+work and history are preserved, and published-payload cleanup is skipped on a
+stop. Incomplete items restart on the next run; temporary working files are discarded.
+An intentional file stop exits successfully; an unreadable trigger path fails.
+
+### Get better tags with a local Discogs library
+
+First, download the current month's Discogs data:
 
 ```sh
 ./bcfunl --resources --output ./downloads
 ```
 
-This acquires the current month's Discogs artist/master extracts and builds
-`./downloads/resources/library.sqlite3`. Processing automatically uses that library
-when present. Known genres take precedence; fallback requires a unique exact
-artist-name match and retains provenance. Use `--library` for another database.
+This builds a local reference library at `./downloads/resources/library.sqlite3`.
+It includes artists, album groups (called masters), and individual releases.
+The full download is large, so allow plenty of disk space and time for the first
+setup. Run the same command each month to refresh it.
+
+Next, process a small batch using only that library:
+
+```sh
+./bcfunl --process --offline --user johnsmith \
+  --output ./downloads --serverdir /path/to/music \
+  --parallel 2 --count 10 --summary --timings
+```
+
+`--offline` means no Discogs API requests. bcfunl looks for matching artist,
+album title, and country, then uses confirmed release details to improve tags.
+A Discogs release marked Worldwide can match any country. Genres and styles go
+through the same cleanup rules before being written to your music files.
+If a track still has no genre, offline processing can use an artist default
+when the library has one clear artist-name match.
+
+**Keeping the library somewhere else?** Add its full path:
+
+```sh
+./bcfunl --process --offline --user johnsmith \
+  --output ./downloads --serverdir /path/to/music \
+  --library /path/to/resources/library.sqlite3 --count 10 --summary
+```
+
+To let the Discogs API help when local matching comes up empty, remove `--offline`
+and set `DISCOGS_TOKEN` in your environment or private container `.env` file.
+Local matches need no token. Existing libraries built from artists and masters
+still provide genre defaults; refresh them to add detailed release matching.
+These examples keep your staged downloads. Add `--clean` after you are happy
+with the results. For existing extract files and more options, see the
+[Discogs resource guide](docs/REFERENCE.md#monthly-discogs-research-resources).
 
 ### Check and back up collection history
 
@@ -195,11 +239,10 @@ sudo apt install aria2 libsqlite3-0
 sudo apt install util-linux
 ```
 
-Audio inspection, tagging, artwork reads, and PCM verification run in Rust using
-Lofty and Symphonia. ZIP extraction, directory walking, gzip decoding and SHA-256
-verification also run in Rust. Only aria2c is invoked by the executable. The
-optional shell maintenance wrapper uses flock. The `sqlite3` command is optional for manual
-queries; bcfunl links the SQLite library directly.
+Audio checking, tagging, artwork handling, and ZIP extraction are built in.
+You do not need FFmpeg, ffprobe, metaflac, 7-Zip, or Python for normal use.
+The optional scheduling script uses `flock`. Install the `sqlite3` command only
+if you want to inspect the history database yourself.
 
 For TrueNAS, use the [deployment guide](docs/TRUENAS.md). If the appliance lacks
 the runtime, install it in a Linux container or VM with persistent dataset mounts.
@@ -208,7 +251,7 @@ the runtime, install it in a Linux container or VM with persistent dataset mount
 
 - Keep the same `--output` directory to retain `collection.sqlite3` history. Treat cookies and databases containing signed links as private.
 - Completed work skips on repeat runs. Download `--force` can replace downloaded files; processing never overwrites an existing music-library release.
-- Preorders remain excluded, with a narrow exception for confirmed single-track releases dated strictly before today (UTC). Same-day and uncertain releases remain excluded.
+- Preorders are checked for available downloads. Purchases that are not ready wait for a later run.
 - Processing verifies decoded audio and tags before publication. Completed-publication skips and cleanup check the manifest and file presence rather than rehashing audio.
 - Download, process, and clean jobs sharing staging cannot overlap. The maintenance wrapper also locks its complete workflow.
 - Run from the application directory so `data/artistmap.yaml` loads. Mapping changes affect later invocations, not already-published files.
@@ -238,20 +281,3 @@ Remove cookies, signed URLs, and private data.
 ## License
 
 See [LICENSE](LICENSE) for the GNU General Public License, version 3.
-
-Processing reads and writes metadata with Lofty and validates decoded audio with
-Symphonia, following VCW's native container handling. FFmpeg, ffprobe, metaflac,
-and Python/Mutagen are not runtime requirements.
-
-`--parallel` controls concurrent releases. Track reads and copy/tag/verification
-jobs share one process-wide pool capped at eight workers and available CPU
-parallelism. Multiple releases share this pool rather than each creating a new
-track pool. Omitting `--parallel` processes one release at a time while its tracks
-can still run concurrently. Timing components sum track work and may exceed wall
-time. Publication waits for every track worker and all verification checks.
-
-For Discogs enrichment, set `DISCOGS_TOKEN` in the environment (or the private
-Compose `.env`). Matching genres/styles replace the Bandcamp genre collection.
-Missing catalog numbers come from the first eligible Discogs release. Unknown
-Bandcamp genre phrases are excluded; descriptive EBM aliases expand to separate
-`EBM` and `Electronic` values. Short canonical acronyms retain uppercase spelling.

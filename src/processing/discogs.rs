@@ -1,5 +1,6 @@
 //! Discogs provider/client reuse from VCW, with bcfunl's existing HTTP stack.
 use super::{Release, Track, common, value};
+use crate::discogs_identity::{lookup_title, same, search_title};
 use crate::shutdown;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -145,92 +146,6 @@ fn country_matches(provider: &str, source: &str) -> bool {
                     .any(|part| country(part.trim()) == source)))
 }
 // Edition notes differ across stores; retain them in tags, not lookup identity.
-fn search_title(raw: &str) -> String {
-    fn edition(note: &str) -> bool {
-        let note = note
-            .to_ascii_lowercase()
-            .replace("re-issued", "reissued")
-            .replace("re-mastered", "remastered");
-        let words: Vec<_> = note
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .collect();
-        let mut year = false;
-        let mut kind = false;
-        for word in words {
-            if word.len() == 4
-                && word
-                    .parse::<u16>()
-                    .is_ok_and(|n| (1900..=2099).contains(&n))
-            {
-                year = true;
-            } else {
-                match word.to_ascii_lowercase().as_str() {
-                    "remaster" | "remastered" | "reissue" | "reissued" | "rm" | "re" => kind = true,
-                    "digital" | "digitally" | "edition" | "version" | "in" => {}
-                    _ => return false,
-                }
-            }
-        }
-        year && kind
-    }
-    let mut title = raw.trim();
-    loop {
-        let mut cut = None;
-        for (open, close) in [('(', ')'), ('[', ']')] {
-            if title.ends_with(close)
-                && let Some(pos) = title.rfind(open)
-                && edition(&title[pos + 1..title.len() - 1])
-            {
-                cut = Some(pos);
-            }
-        }
-        if cut.is_none() {
-            for (pos, c) in title.char_indices() {
-                if c.is_whitespace() && edition(title[pos..].trim()) {
-                    cut = Some(pos);
-                    break;
-                }
-            }
-        }
-        let Some(pos) = cut else { break };
-        let base = title[..pos]
-            .trim_end()
-            .trim_end_matches(['-', ':', '–', '—'])
-            .trim_end();
-        if base.is_empty() {
-            break;
-        }
-        title = base;
-    }
-    title.to_owned()
-}
-
-fn lookup_title(value: &str) -> String {
-    search_title(value)
-        .replace(['(', ')', '[', ']'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-fn same(a: &str, b: &str) -> bool {
-    let identity = |value: &str| {
-        let title = lookup_title(value);
-        let mut words: Vec<_> = title.split_whitespace().collect();
-        for i in 0..words.len().saturating_sub(1) {
-            if ["vol.", "vol", "volume"]
-                .iter()
-                .any(|marker| words[i].eq_ignore_ascii_case(marker))
-                && words[i + 1].chars().all(|c| c.is_ascii_digit())
-            {
-                words[i] = "volume";
-            }
-        }
-        super::key(&words.join(" "))
-    };
-    let a = identity(a);
-    !a.is_empty() && a == identity(b)
-}
 fn same_artist(a: &str, b: &str) -> bool {
     let clean = |name: &str| {
         let name = vcw_metadata::positions::clean_artist(name.trim().trim_end_matches('*').trim());
@@ -391,46 +306,9 @@ impl Lookup {
     }
     pub(super) fn find(&self, release: &Release, tracks: &[Track]) -> Result<Option<Match>> {
         shutdown::check()?;
-        let credits: std::collections::HashSet<_> = tracks
-            .iter()
-            .filter_map(|track| track.tags.get("ALBUMARTIST"))
-            .map(|values| values.join(";"))
-            .filter(|value| !value.trim().is_empty())
-            .collect();
-        ensure!(
-            credits.len() <= 1,
-            "Conflicting ALBUMARTIST values require review"
-        );
-        let credit = credits
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| release.artist.clone());
-        let artist = super::credits::artist_names(&credit)
-            .into_iter()
-            .next()
-            .unwrap_or_default();
-        let album = common(tracks, "ALBUM")?;
-        let album = if album.is_empty() {
-            &release.album
-        } else {
-            &album
-        };
-        let album = search_title(&crate::sanitizing::title(album, &artist).0);
-        let iso = common(tracks, "RELEASECOUNTRY")?;
-        let iso = country(if iso.is_empty() {
-            &release.country
-        } else {
-            &iso
-        });
-        if artist.is_empty() || album.is_empty() {
-            eprintln!("  Discogs unresolved: artist and title are required");
+        let Some((credit, artist, album, iso)) = identity(release, tracks)? else {
             return Ok(None);
-        }
-        if iso.is_empty() {
-            eprintln!(
-                "  Discogs [{artist} - {album}]: source country unknown; only Worldwide matches qualify"
-            );
-        }
+        };
         let aliases = artist_aliases(&artist);
         let query_album = lookup_title(&album);
         let mut queries: Vec<_> = aliases
@@ -535,6 +413,147 @@ impl Lookup {
         Ok(None)
     }
 }
+fn identity(
+    release: &Release,
+    tracks: &[Track],
+) -> Result<Option<(String, String, String, String)>> {
+    let credits: std::collections::HashSet<_> = tracks
+        .iter()
+        .filter_map(|track| track.tags.get("ALBUMARTIST"))
+        .map(|values| values.join(";"))
+        .filter(|value| !value.trim().is_empty())
+        .collect();
+    ensure!(
+        credits.len() <= 1,
+        "Conflicting ALBUMARTIST values require review"
+    );
+    let credit = credits
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| release.artist.clone());
+    let artist = super::credits::artist_names(&credit)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let album = common(tracks, "ALBUM")?;
+    let album = if album.is_empty() {
+        &release.album
+    } else {
+        &album
+    };
+    let album = search_title(&crate::sanitizing::title(album, &artist).0);
+    let iso = common(tracks, "RELEASECOUNTRY")?;
+    let iso = country(if iso.is_empty() {
+        &release.country
+    } else {
+        &iso
+    });
+    if artist.is_empty() || album.is_empty() {
+        eprintln!("  Discogs unresolved: artist and title are required");
+        return Ok(None);
+    }
+    if iso.is_empty() {
+        eprintln!(
+            "  Discogs [{artist} - {album}]: source country unknown; only Worldwide matches qualify"
+        );
+    }
+    Ok(Some((credit, artist, album, iso)))
+}
+
+pub(super) fn find_local(
+    db: &crate::db::Database,
+    release: &Release,
+    tracks: &[Track],
+    source: Value,
+) -> Result<Option<Match>> {
+    let Some((credit, artist, album, iso)) = identity(release, tracks)? else {
+        return Ok(None);
+    };
+    let aliases = artist_aliases(&artist);
+    let key = crate::discogs_identity::title_key(&album);
+    for row in db.query(
+        "SELECT id FROM releases WHERE title_key=? ORDER BY id",
+        &[&key],
+    )? {
+        shutdown::check()?;
+        crate::limits::checkpoint()?;
+        let id = row[0].as_deref().context("Missing local release ID")?;
+        let data = db.query("SELECT data FROM releases WHERE id=?", &[id])?;
+        let body: Value = serde_json::from_str(
+            data.first()
+                .and_then(|row| row[0].as_deref())
+                .context("Missing local release data")?,
+        )?;
+        let names: Vec<_> = body["artists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                a["anv"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| a["name"].as_str())
+            })
+            .collect();
+        let detail_credit = names.join(";");
+        let title = body["title"].as_str().unwrap_or_default();
+        let country = body["country"].as_str().unwrap_or_default();
+        if !same_credit(&detail_credit, &credit, &aliases)
+            || !same(title, &album)
+            || !country_matches(country, &iso)
+        {
+            continue;
+        }
+        let labels: Vec<_> = body["labels"].as_array().into_iter().flatten().collect();
+        let detail = vcw_metadata::Release {
+            id: row[0].clone().context("Missing local release ID")?,
+            album: title.into(),
+            album_artist: detail_credit,
+            country: country.into(),
+            catalog: labels
+                .iter()
+                .filter_map(|l| l["catno"].as_str())
+                .find(|s| catalog(s).is_some())
+                .unwrap_or_default()
+                .into(),
+            label: labels
+                .iter()
+                .filter_map(|l| l["name"].as_str())
+                .next()
+                .unwrap_or_default()
+                .into(),
+            genres: ["genres", "styles"]
+                .into_iter()
+                .flat_map(|field| {
+                    body[field]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut found = selected(&detail, &artist, &album, &iso);
+        found.performers = album_credits(&body, &["Performer"]);
+        found.composers = album_credits(&body, &["Composer", "Composed By"]);
+        found.conductors = album_credits(&body, &["Conductor", "Conducted By"]);
+        found.evidence["source"] = source;
+        found.evidence["selection_policy"] = json!("first-eligible-local-release-id");
+        found.evidence["matched_artists"] = json!(names);
+        found.evidence["performer_credits"] = json!(found.performers);
+        found.evidence["composer_credits"] = json!(found.composers);
+        found.evidence["conductor_credits"] = json!(found.conductors);
+        eprintln!(
+            "  Discogs local [{artist} - {album}]: selected {} (catalog {})",
+            detail.id, detail.catalog
+        );
+        return Ok(Some(found));
+    }
+    Ok(None)
+}
+
 fn selected(detail: &vcw_metadata::Release, artist: &str, album: &str, iso: &str) -> Match {
     let catalog_number = catalog(&detail.catalog);
     let genres = crate::genres::normalize(&detail.genres, &[artist.to_owned()]);
@@ -670,6 +689,66 @@ mod tests {
             cache,
             cancel: Cancel::new(),
         }
+    }
+    #[test]
+    fn local_release_match_uses_shared_rules_and_preserves_credits() {
+        let db = crate::db::Database::connect(":memory:").unwrap();
+        db.query(
+            "CREATE TABLE releases(id INTEGER PRIMARY KEY,title_key TEXT,data TEXT)",
+            &[],
+        )
+        .unwrap();
+        let mut wrong = detail(1, "WRONG", json!(["Rock"]));
+        wrong["country"] = json!("France");
+        let mut valid = detail(2, "DG-011", json!(["EBM - electronic body music"]));
+        valid["artists"][0]["name"] = json!("Romy*");
+        valid["country"] = json!("UK&US");
+        valid["extraartists"] = json!([
+            {"name":"Composer One","role":"Composed By"},
+            {"name":"Conductor One","role":"Conductor"},
+            {"name":"Performer One","role":"Performer"},
+            {"name":"Track Only","role":"Performer","tracks":"1"}
+        ]);
+        for body in [wrong, valid] {
+            db.query(
+                "INSERT INTO releases VALUES(?,?,?)",
+                &[
+                    &body["id"].to_string(),
+                    &crate::discogs_identity::title_key(body["title"].as_str().unwrap()),
+                    &body.to_string(),
+                ],
+            )
+            .unwrap();
+        }
+        let (mut release, mut tracks) = source();
+        release.album = "Proof (2026 Remaster)".into();
+        tracks[0]
+            .tags
+            .insert("ALBUM".into(), vec![release.album.clone()]);
+        let found = find_local(
+            &db,
+            &release,
+            &tracks,
+            json!({"dataset":"discogs-releases"}),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(found.ids, ["2"]);
+        assert_eq!(found.catalog.as_deref(), Some("DG-011"));
+        assert_eq!(found.performers, ["Performer One"]);
+        assert_eq!(found.composers, ["Composer One"]);
+        assert_eq!(found.conductors, ["Conductor One"]);
+        assert!(found.genres.contains(&"EBM".into()));
+        assert!(found.genres.contains(&"Electronic".into()));
+        assert_eq!(found.evidence["source"]["dataset"], "discogs-releases");
+        tracks[0]
+            .tags
+            .insert("ALBUMARTIST".into(), vec!["Unrelated".into()]);
+        assert!(
+            find_local(&db, &release, &tracks, Value::Null)
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn title_grouping_punctuation_does_not_change_identity_or_volume() {
