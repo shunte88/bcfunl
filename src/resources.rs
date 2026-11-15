@@ -173,6 +173,7 @@ fn schema(db: &Database) -> Result<()> {
         "CREATE TABLE masters(id INTEGER PRIMARY KEY CHECK(id>0),title TEXT NOT NULL,main_release_id INTEGER,year INTEGER,data_quality TEXT,genres TEXT NOT NULL,styles TEXT NOT NULL)",
         "CREATE TABLE master_artists(master_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,join_text TEXT,PRIMARY KEY(master_id,position))",
         "CREATE TABLE artist_genres(artist_id INTEGER NOT NULL,genre TEXT COLLATE NOCASE NOT NULL,master_count INTEGER NOT NULL,PRIMARY KEY(artist_id,genre)) WITHOUT ROWID",
+        "CREATE TABLE sanitized_genres(genre TEXT PRIMARY KEY COLLATE NOCASE NOT NULL) WITHOUT ROWID",
         "CREATE TABLE releases(id INTEGER PRIMARY KEY CHECK(id>0),master_id INTEGER,title TEXT NOT NULL,title_key TEXT NOT NULL,country TEXT,released TEXT,data TEXT NOT NULL)",
         "CREATE TABLE release_artists(release_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,PRIMARY KEY(release_id,position))",
         "CREATE TABLE resource_import(dataset TEXT PRIMARY KEY,source_file TEXT NOT NULL,source_sha256 TEXT NOT NULL,imported_at TEXT NOT NULL,record_count INTEGER NOT NULL,field_counts TEXT NOT NULL)",
@@ -512,7 +513,13 @@ fn build_full(
                 .is_empty(),
             None => true,
         };
-        if let Some(row) = rows.first().filter(|_| releases_current) {
+        let genre_schema = !db
+            .query(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sanitized_genres'",
+                &[],
+            )?
+            .is_empty();
+        if let Some(row) = rows.first().filter(|_| releases_current && genre_schema) {
             eprintln!("Library already contains these snapshots");
             let n = db.query(
                 "SELECT record_count FROM resource_import WHERE dataset='masters'",
@@ -563,6 +570,15 @@ fn build_full(
                 &count.to_string(),
                 &json!(fields).to_string(),
             ],
+        )?;
+    }
+    eprintln!("Building sanitized genre vocabulary");
+    let raw = db.query("SELECT DISTINCT value FROM masters,json_each(masters.genres) UNION SELECT DISTINCT value FROM masters,json_each(masters.styles) UNION SELECT DISTINCT value FROM releases,json_each(releases.data,'$.genres') UNION SELECT DISTINCT value FROM releases,json_each(releases.data,'$.styles')", &[])?;
+    let values = raw.iter().filter_map(|row| row[0].as_deref());
+    for genre in crate::genres::normalize(values, &[]) {
+        db.query(
+            "INSERT OR IGNORE INTO sanitized_genres VALUES(?)",
+            &[&genre],
         )?;
     }
     eprintln!("Building artist genre defaults and indexes");
@@ -699,6 +715,22 @@ mod tests {
         assert_eq!(body["labels"][0]["catno"], "ABC-1");
         assert_eq!(body["tracklist"][0]["artists"][0]["name"], "Track Artist");
         assert_eq!(body["notes"], "Retain notes");
+        let genres = db.query("SELECT genre FROM sanitized_genres", &[]).unwrap();
+        assert!(
+            genres
+                .iter()
+                .any(|row| row[0].as_deref() == Some("Ambient"))
+        );
+        assert!(
+            genres
+                .iter()
+                .any(|row| row[0].as_deref() == Some("Electronic"))
+        );
+        assert!(genres.iter().all(|row| {
+            row[0]
+                .as_deref()
+                .is_some_and(|s| !s.chars().any(char::is_numeric))
+        }));
         assert_eq!(body["master_id"]["value"], "10");
         assert_eq!(
             db.query("SELECT artist_id,anv FROM release_artists", &[])

@@ -121,6 +121,7 @@ pub(super) struct Lookup {
 }
 #[derive(Clone, Debug)]
 pub(super) struct Match {
+    pub(super) body: Value,
     pub catalog: Option<String>,
     label: Option<String>,
     pub genres: Vec<String>,
@@ -233,7 +234,7 @@ fn same_credit(actual: &str, expected: &str, aliases: &[String]) -> bool {
         })
 }
 
-fn album_credits(body: &Value, roles: &[&str]) -> Vec<String> {
+pub(super) fn album_credits(body: &Value, roles: &[&str]) -> Vec<String> {
     let mut names = Vec::new();
     for credit in body["extraartists"].as_array().into_iter().flatten() {
         if !credit["tracks"].as_str().unwrap_or("").trim().is_empty() {
@@ -454,7 +455,7 @@ fn identity(
     }
     if iso.is_empty() {
         eprintln!(
-            "  Discogs [{artist} - {album}]: source country unknown; only Worldwide matches qualify"
+            "  Discogs [{artist} - {album}]: source country unknown; applying mode-specific country policy"
         );
     }
     Ok(Some((credit, artist, album, iso)))
@@ -465,6 +466,28 @@ pub(super) fn find_local(
     release: &Release,
     tracks: &[Track],
     source: Value,
+) -> Result<Option<Match>> {
+    find_local_policy(db, release, tracks, source, false)
+}
+pub(super) fn find_collection(
+    db: &crate::db::Database,
+    release: &Release,
+    tracks: &[Track],
+) -> Result<Option<Match>> {
+    find_local_policy(
+        db,
+        release,
+        tracks,
+        json!({"dataset":"discogs-releases","mode":"collection"}),
+        true,
+    )
+}
+fn find_local_policy(
+    db: &crate::db::Database,
+    release: &Release,
+    tracks: &[Track],
+    source: Value,
+    collection: bool,
 ) -> Result<Option<Match>> {
     let Some((credit, artist, album, iso)) = identity(release, tracks)? else {
         return Ok(None);
@@ -500,9 +523,45 @@ pub(super) fn find_local(
         let country = body["country"].as_str().unwrap_or_default();
         if !same_credit(&detail_credit, &credit, &aliases)
             || !same(title, &album)
-            || !country_matches(country, &iso)
+            || (!(collection && iso.is_empty()) && !country_matches(country, &iso))
         {
             continue;
+        }
+        if collection {
+            let known_ids = tracks
+                .iter()
+                .flat_map(|t| t.tags.get("DISCOGSID").into_iter().flatten())
+                .filter(|id| !id.trim().is_empty())
+                .collect::<Vec<_>>();
+            if !known_ids.is_empty() && !known_ids.iter().all(|known| known.trim() == id) {
+                continue;
+            }
+            let known_catalogs = tracks
+                .iter()
+                .flat_map(|t| {
+                    ["CATALOGNUMBER", "CATALOGNO"]
+                        .into_iter()
+                        .filter_map(|key| t.tags.get(key))
+                })
+                .flatten()
+                .filter(|cat| catalog(cat).is_some())
+                .collect::<Vec<_>>();
+            let key = |s: &str| {
+                s.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+            };
+            if !known_catalogs.iter().all(|known| {
+                body["labels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| l["catno"].as_str())
+                    .any(|cat| key(cat) == key(known))
+            }) {
+                continue;
+            }
         }
         let labels: Vec<_> = body["labels"].as_array().into_iter().flatten().collect();
         let detail = vcw_metadata::Release {
@@ -545,6 +604,7 @@ pub(super) fn find_local(
         found.evidence["performer_credits"] = json!(found.performers);
         found.evidence["composer_credits"] = json!(found.composers);
         found.evidence["conductor_credits"] = json!(found.conductors);
+        found.body = body.clone();
         eprintln!(
             "  Discogs local [{artist} - {album}]: selected {} (catalog {})",
             detail.id, detail.catalog
@@ -559,6 +619,7 @@ fn selected(detail: &vcw_metadata::Release, artist: &str, album: &str, iso: &str
     let genres = crate::genres::normalize(&detail.genres, &[artist.to_owned()]);
     let ids = vec![detail.id.clone()];
     Match {
+        body: Value::Null,
         catalog: catalog_number.clone(),
         label: catalog(&detail.label),
         genres: genres.clone(),

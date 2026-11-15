@@ -152,6 +152,7 @@ impl Database {
             db.query("UPDATE releases SET artist=?,sanitized_title=?,catalog_num=COALESCE(NULLIF(CASE WHEN lower(trim(catalog_num))='none' THEN '' ELSE catalog_num END,''),NULLIF(?,'')) WHERE user=? AND item_key=?", &[&crate::sanitizing::artist_display(get(2)),&title,catalog.as_deref().unwrap_or_default(),get(0),get(1)])?;
         }
         db.query("CREATE TABLE IF NOT EXISTS parked_payloads (path TEXT PRIMARY KEY,user TEXT NOT NULL,item_key TEXT NOT NULL,parked_date TEXT NOT NULL,reason TEXT NOT NULL,no_burn INTEGER NOT NULL DEFAULT 1 CHECK(no_burn=1))", &[])?;
+        db.query("CREATE TABLE IF NOT EXISTS collection (path TEXT NOT NULL,artist TEXT NOT NULL,title TEXT NOT NULL,walk_date TEXT NOT NULL,PRIMARY KEY(path,artist,title))", &[])?;
         db.query("COMMIT", &[])?;
         Ok(db)
     }

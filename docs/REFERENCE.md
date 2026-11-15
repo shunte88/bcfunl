@@ -1235,3 +1235,77 @@ add full release matching. Each release-processing worker opens its own read-onl
 connection. A monthly rebuild streams records and replaces the library only
 after successful validation. Full release extracts and the resulting database
 need substantially more disk space than masters alone.
+
+## Clean an existing music collection
+
+`--collection` edits existing media tags in place. It is separate from Bandcamp
+acquisition and staged publication, and always uses the local Discogs database.
+No cookies, API token, network requests, renaming, transcoding, artwork downloads,
+or staged payload cleanup are involved. `--walk` is not an option.
+
+```sh
+./bcfunl --collection --serverdir /music --output ./history \
+  --library /resources/library.sqlite3 --parallel 3 --count 10 --summary
+```
+
+Rebuild resources with version 0.2.0 first. The new `sanitized_genres` table is
+a unique, case-insensitive vocabulary built from both master and detailed release
+genres/styles, using the shared spelling, case, validation, and expansion rules.
+Collection mode refuses a missing or empty vocabulary before changing music.
+Every final genre must belong to that vocabulary, including expanded values.
+There is no artist-default genre guessing in this mode.
+
+The walk groups audio by folder, then album tag. It supports FLAC, MP3, WAV,
+AIFF/AIF/AIFC, M4A (ALAC/AAC), and Ogg Vorbis. Unsupported formats and symlinks
+are untouched. Folders used for private bcfunl temporary work are excluded.
+Missing or conflicting album identity prevents enrichment; safe local tag
+cleanup still applies. Existing Discogs IDs, catalogs (ignoring spaces and
+hyphens), and known countries constrain matching. With no known country,
+collection mode accepts a matching artist/title from any country. The first
+eligible local release by ID is selected. Download processing retains its
+existing stricter country policy. Check a small batch before a large walk,
+especially where pressing identifiers are missing.
+
+Confirmed releases supply album artist and sorting names, label, catalog
+(`CATALOGNUMBER` and `CATALOGNO`), Discogs ID, genre/style, release date/year,
+and explicit performer, composer, conductor, lyricist, writer, producer, engineer,
+arranger, remixer, and mixing credits. Individual track artists/credits are used
+only when exactly one Discogs track title matches. Track-scoped album credits
+require exact listed positions; ambiguous ranges are not guessed. Existing
+named tags are carried forward. Without a release match, missing track artist,
+performer, album artist, sort fields, catalog alias, and year are filled only
+where existing tags provide the value. Unknown genres are removed. No track
+number or artwork is invented.
+
+Before replacement, a private copy in the same folder is tagged and checked
+against the original decoded audio, every embedded picture, and requested tags.
+Replacement is atomic per file. Ownership, standard permissions, and modification
+time (including subsecond precision) are retained; Linux extended attributes
+are copied too. Read-only or hard-linked media requires review. Files changed
+by another writer during the operation are rejected. Completed file updates
+are not rolled back if another file in the folder fails. Back up the music
+before the first walk. A killed process may leave a private temporary folder;
+the original path is not replaced before verification.
+
+History lives in `<output>/collection.sqlite3`, separate from the Discogs
+reference database. The new `collection` table records `path`, `artist`, `title`,
+and UTC `walk_date`, keyed by path/artist/title. Only successfully completed
+folders are recorded. Repeat runs skip recorded folders; `--force` revisits them.
+`--count` limits attempted folders, including failed attempts. `--artist` selects
+folders by a case-insensitive path substring. Keep history outside the music tree.
+The stop-file mechanism applies here too.
+
+Concurrency defaults to 3 and accepts 3 through 16 folder workers. Each opens
+its own read-only library connection; a file is handled once per folder and
+there are no API throttles or nested track pools. For horizontal operation,
+partition work into nonoverlapping roots. The music-root lock excludes another
+collection or publication job using the same root; do not run overlapping parent
+and child roots. Workers may share a history database only on storage that
+correctly supports SQLite locking, otherwise use separate history directories.
+Collection jobs share the history lock with one another, but block acquisition,
+processing, cleanup, and database maintenance using that history until they finish.
+The `--nice` governor remains specific to staged `--process`; use container
+CPU/memory limits to cap collection jobs.
+
+With the supplied Compose file, `docker compose run --rm -T bcfunl collection`
+uses the configured music and staging paths, with three workers.

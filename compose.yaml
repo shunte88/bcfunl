@@ -93,6 +93,14 @@ services:
               "$$@"
             ;;
 
+          collection)
+            exec /app/bcfunl --collection \
+              --output "$${BCFUNL_STAGING}" \
+              --serverdir "$${BCFUNL_MUSIC}" \
+              --summary \
+              "$$@"
+            ;;
+
           process)
             echo "BCFunl :: Processing staged releases"
 
@@ -115,7 +123,7 @@ services:
             ;;
 
           *)
-            echo "Usage: bcfunl database|acquire|process|cleanup [extra arguments]" >&2
+            echo "Usage: bcfunl database|acquire|process|cleanup|collection [extra arguments]" >&2
             exit 2
             ;;
         esac

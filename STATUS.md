@@ -9,7 +9,7 @@ this session has no general reminder/scheduling tool.
 
 
 Updated: 2026-11-14 (America/New_York)
-Local release: **v0.1.55**, full local Discogs release matching; Docker/full-import acceptance pending
+Local release: **v0.2.0**, in-place collection tagging; Docker/full-import/live-walk acceptance pending
 
 ## Current outcome
 
@@ -2870,3 +2870,101 @@ en dashes, friendly minimally technical explanations in the spirit of For Dummie
 short practical examples, implementation details in the reference guide.
 Markdown fences, local links, punctuation preferences and git diff whitespace
 checked. Documentation-only change; no new runtime/build tests or version bump.
+
+## 2026-11-14 handoff: v0.2.0 collection tag maintenance
+
+Stue requested a new --collection verb to tidy an existing mixed-vendor music
+library in place. He explicitly corrected the initial --walk reference:
+--collection ONLY, no --walk alias. Existing staging publication stays separate.
+
+CLI: --collection --serverdir MUSIC --output HISTORY [--library LIBRARY]
+[--parallel 3..16] [--count N] [--artist PATH_SUBSTRING] [--force] [--summary].
+Defaults: 3 collection workers, library at <output>/resources/library.sqlite3.
+Other modes retain parallel 2..8; mode-specific upper bounds checked in validate.
+Collection conflicts with staged process/clean/resources/database, purchase dates,
+templates, --offline and --nice. Collection is inherently offline and never uses
+cookies/API. Native Windows returns an explicit unsupported-platform error.
+No new crate or runtime tool dependency was introduced. --nice remains specific
+to staged --process; use container CPU/RAM ceilings for collection walks.
+
+src/processing/collection.rs walks real directories, skips symlinks, unsupported
+formats and private temporary folders, and groups audio by folder then album tag.
+Supported: FLAC, MP3, WAV, AIFF/AIF/AIFC, M4A ALAC/AAC, Ogg Vorbis. Filenames and
+folders are never renamed. Count limits attempted folders, not tracks. A bounded
+Rayon pool handles 3..16 folders, without nested track pools or API pacing. Each
+worker opens a read-only Discogs connection. Horizontal operation partitions
+nonoverlapping music roots; no distributed dispatcher or automatic partitioning.
+
+Reuse local indexed artist/title matching. Collection constrains existing
+Discogs IDs, catalog numbers (ignoring punctuation/spaces/case), and known
+countries. Missing country allows any country for artist/title matches in this
+mode only. First eligible local release ID wins. Download processing's stricter
+country matching remains. Missing/conflicting identity skips enrichment and
+performs safe cleanup only. Confirmed records supply album artists/sorts,
+track artists (unique exact track-title match), record/track-scoped explicit
+performer/composer/conductor/lyricist/writer/producer/engineer/arranger/remixer/
+mixer credits, genre/style, release date/year, label, catalog aliases and Discogs
+ID. Exact listed track positions support scoped credits; ambiguous ranges are
+not guessed. Sort-name commas are retained, and existing source credits/tags
+are carried forward. Without a match, derive only supported missing fields from
+existing tags; no artist-default genre guessing or invented track numbers/art.
+
+Resources now build sanitized_genres from distinct master+release genre/style
+values via the shared validation/case/spelling/expansion logic. Rebuild with
+--resources before collection mode. Same-source hash skipping also checks for
+this new table, so an old library gets rebuilt. Collection requires a nonempty
+vocabulary before writing music. Every expanded final genre must belong to it;
+unlisted entries are removed. The library remains read-only during collection.
+
+History adds collection(path,artist,title,walk_date), primary key path/artist/title,
+to <output>/collection.sqlite3 via normal DDL. Only completed folders are recorded;
+all album identities in a mixed folder are kept. Repeat runs skip those folders;
+--force revisits them after new files or refreshed metadata. Shared collection
+history locks allow peer collection jobs but exclude acquisition/process/cleanup/
+database maintenance on the same history root, preventing restore swaps mid-walk.
+Music-root locks exclude another collection/publication job on the same root.
+Do not use overlapping parent/child roots across jobs. Shared histories require
+SQLite-compatible storage; separate histories are fine. All locks are advisory.
+
+Updates use a private same-directory copy, native tag writing, decoded PCM hash
+comparison, verification of ALL embedded pictures and all requested named tags,
+then atomic per-file replacement. File modification time (subsecond precision),
+owner/group and standard permissions are preserved; Linux xattrs copied too.
+Source tag changes since initial read and inode/size/mtime/ctime changes before
+replacement cause refusal. Read-only/hard-linked/corrupt media remains unchanged.
+Unknown named tags are retained and no artwork is downloaded or added. Raw tag
+comparison also rewrites stored semicolon lists into canonical repeated values,
+rather than skipping because normalized read values happened to match. File
+locks explicitly unlock on drop, including error paths, so concurrent test
+helper forks cannot extend an advisory lock lifetime. Folder changes are NOT
+transactional: successful files remain updated if another file fails; that
+folder gets no completion history and can be retried. Back up music first.
+
+README, reference, container guide, AGENTS source map, Compose collection mode,
+and actual CLI smoke updated. Compose uses configured music/staging paths and
+native default concurrency; extra --parallel can override it without duplicate
+flags. No --clean is passed. Stop-file startup and cancellation checkpoints apply.
+Version v0.2.0 built 2026-11-15T01:18:00Z (November 14 local time).
+
+Validation: 176 passed, 0 failed, 5 ignored; locked optimized build, strict locked
+Clippy, fmt, workflow-regression, Compose config, and actual offline CLI smoke
+with PATH=/nonexistent passed. Tests cover mixed containers, unlisted/all-removed
+genres, expanded lists, dates/credits/catalog, source custom tags, exact mtimes,
+multiple embedded pictures, parallel folder processing, read-only library access,
+ID/catalog/country exclusions, Linux xattrs, changed-source refusal, corrupt files,
+hardlinks, history skips, and shared-lock exclusion/compatibility. Actual CLI
+exercises collection without network/tools plus original governor publication,
+stop-file startup and cleanup. check-build.sh attempted: Docker daemon access
+unavailable, so full image/package gate remains BLOCKED. Full monthly extract
+acceptance, production media2026 walk, remote multi-machine execution, and live
+resource-pressure behavior have NOT been exercised. No live music/data changes,
+remote deployment, commit or push performed.
+
+### Documentation confirmation and stand-down
+
+Confirmed README contains "Tidy an existing music collection", resource refresh
+and --collection examples, genre restrictions, preserved file modification dates
+and artwork, supported formats, concurrency 3 through 16, history skips and
+--force guidance. Memory and status are current for v0.2.0. Native validation
+remains 176 passed, 0 failed, 5 ignored; Docker/full-import/live-walk acceptance
+is still pending. No runtime checks were repeated for this handoff-only update.

@@ -14,3 +14,9 @@ pub(crate) mod clean {
         )
     }
 }
+
+pub(crate) mod collection {
+    pub(crate) fn run(_: &crate::Args) -> anyhow::Result<()> {
+        anyhow::bail!("Collection tagging requires Linux or macOS")
+    }
+}

@@ -59,6 +59,7 @@ enum VariousTag {
 #[derive(Clone, Debug, Parser)]
 #[command(
     version = concat!("v", env!("CARGO_PKG_VERSION"), " (built ", env!("BCFUNL_BUILD_DATE"), ")"),
+    group(clap::ArgGroup::new("media_mode").args(["process", "collection"])),
     about = "Download and process a Bandcamp collection with SQLite history"
 )]
 struct Args {
@@ -76,14 +77,14 @@ struct Args {
     /// Maximum new releases to attempt; retries follow outside this limit
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     count: Option<u32>,
-    /// Run 2-8 downloads or release-processing jobs at once; omit for sequential work
-    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=8))]
+    /// Concurrent jobs: 2-8 for downloads/process, 3-16 for collection; omit for mode default
+    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=16))]
     parallel: Option<u8>,
     #[arg(long, default_value = "downloads")]
     output: PathBuf,
     #[arg(long, value_enum, ignore_case = true, default_value = "flac")]
     format: Format,
-    /// Retry completed work; processing never replaces existing server releases
+    /// Revisit completed work; collection updates tags in place, processing keeps existing releases
     #[arg(long)]
     force: bool,
     /// Print a status table for releases attempted since this process started
@@ -95,6 +96,9 @@ struct Args {
     /// Tag and publish downloads, enriching from Discogs when credentials are configured
     #[arg(long)]
     process: bool,
+    /// Clean existing music tags in place using the offline Discogs library
+    #[arg(long, conflicts_with_all = ["process", "clean", "resources", "database", "fromdt", "todt", "template", "nice", "offline", "varioustag"])]
+    collection: bool,
     /// Stop cleanly when this file exists (default: <output>/.bcfunl-stop)
     #[arg(long)]
     stopfile: Option<PathBuf>,
@@ -122,11 +126,16 @@ struct Args {
     /// Import an existing Discogs releases XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
     release_file: Option<PathBuf>,
-    /// Destination music library for --process
-    #[arg(long, requires = "process", required_if_eq("process", "true"))]
+    /// Music folder for --process or --collection
+    #[arg(
+        long,
+        requires = "media_mode",
+        required_if_eq("process", "true"),
+        required_if_eq("collection", "true")
+    )]
     serverdir: Option<PathBuf>,
     /// Discogs research SQLite library for local release matching and offline genre fallback (default: <output>/resources/library.sqlite3)
-    #[arg(long, requires = "process")]
+    #[arg(long, requires = "media_mode")]
     library: Option<PathBuf>,
     /// Relative output naming rule; the audio extension is appended
     #[arg(long, requires = "process")]
@@ -144,6 +153,24 @@ struct Args {
 }
 impl Args {
     fn validate(&self) -> Result<()> {
+        if let Some(parallel) = self.parallel {
+            ensure!(
+                if self.collection {
+                    (3..=16).contains(&parallel)
+                } else {
+                    parallel <= 8
+                },
+                "--parallel must be 3-16 for --collection, or 2-8 for other modes"
+            );
+        }
+        ensure!(
+            self.process || self.collection || self.serverdir.is_none(),
+            "--serverdir requires --process or --collection"
+        );
+        ensure!(
+            self.process || self.collection || self.library.is_none(),
+            "--library requires --process or --collection"
+        );
         ensure!(
             !self.user.is_empty()
                 && self
@@ -603,6 +630,9 @@ fn run(args: Args) -> Result<()> {
         return resources::run(&args);
     }
     sanitizing::load_artist_map()?;
+    if args.collection {
+        return processing::collection::run(&args);
+    }
     if args.process {
         let _governor = limits::start(args.nice)?;
         let result = processing::run(&args);

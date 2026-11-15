@@ -1236,3 +1236,19 @@ Do not also pass `--stopfile` in extra arguments when the environment sets it.
 Completed history/source payloads remain; private temporary work is discarded,
 and incomplete items restart on the next invocation. No image update is needed
 to create/remove the trigger once the supporting image is deployed.
+
+## Tidy an existing music folder
+
+After rebuilding the local Discogs library with version 0.2.0, try a small
+collection walk:
+
+```sh
+docker compose run --rm -T bcfunl collection --count 10
+```
+
+This uses your configured music folder and staging history. It edits tags in
+place, keeps file modification dates and existing artwork, and does not rename
+files or add artwork. Back up the music before trying it. The default is three
+workers; append `--parallel 16` for up to sixteen. Completed folders skip next
+time; `--force` revisits them. See the
+[collection guide](REFERENCE.md#clean-an-existing-music-collection) for details.

@@ -1,5 +1,6 @@
 //! Offline processing of owned downloads. Credit and native tag handling come from mcfunl.
 pub(crate) mod clean;
+pub(crate) mod collection;
 mod credits;
 mod decoding;
 mod discogs;

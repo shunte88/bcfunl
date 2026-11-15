@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
  library=stage/'resources'/'library.sqlite3';library.parent.mkdir()
  import json
  with sqlite3.connect(library) as db:
-  db.executescript("CREATE TABLE artists(id INTEGER,name TEXT); CREATE TABLE artist_genres(artist_id INTEGER,genre TEXT,master_count INTEGER); CREATE TABLE resource_import(dataset TEXT,source_file TEXT,source_sha256 TEXT); CREATE TABLE releases(id INTEGER PRIMARY KEY,title_key TEXT,data TEXT); CREATE INDEX release_title_key ON releases(title_key,id);")
+  db.executescript("CREATE TABLE sanitized_genres(genre TEXT PRIMARY KEY); INSERT INTO sanitized_genres VALUES('Electronic'),('Ambient'); CREATE TABLE artists(id INTEGER,name TEXT); CREATE TABLE artist_genres(artist_id INTEGER,genre TEXT,master_count INTEGER); CREATE TABLE resource_import(dataset TEXT,source_file TEXT,source_sha256 TEXT); CREATE TABLE releases(id INTEGER PRIMARY KEY,title_key TEXT,data TEXT); CREATE INDEX release_title_key ON releases(title_key,id);")
   db.executemany('INSERT INTO resource_import VALUES(?,?,?)',[('masters','masters.xml','fixture'),('releases','releases.xml','fixture')])
   body={'title':'Governor Proof','artists':[{'name':'Fixture'}],'country':'Worldwide','labels':[{'name':'Fixture Label','catno':'LOCAL-1'}],'genres':['Electronic'],'styles':['Ambient']}
   db.execute('INSERT INTO releases VALUES(?,?,?)',(1,'governor proof',json.dumps(body)))
@@ -30,11 +30,19 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
  assert source.exists()
  with sqlite3.connect(stage/'collection.sqlite3') as db:
   assert db.execute('SELECT process_date FROM releases').fetchone()[0]
+ published=list(server.rglob('*.flac'));stamps={p:p.stat().st_mtime_ns for p in published}
+ result=subprocess.run([binary,'--collection','--parallel','3','--user','johnsmith','--output',str(stage),'--serverdir',str(server),'--count','1','--summary'],env=env,capture_output=True,text=True,timeout=60)
+ assert result.returncode==0,result.stderr
+ assert '1 matched' in result.stdout,result.stdout
+ assert all(p.stat().st_mtime_ns==stamps[p] for p in published)
+ with sqlite3.connect(stage/'collection.sqlite3') as db:
+  rows=db.execute('SELECT artist,title FROM collection').fetchall()
+  assert len(rows)==1 and rows[0][0]=='Fixture' and rows[0][1].startswith('Governor Proof'),rows
  stop=stage/'.bcfunl-stop';stop.touch()
- for mode in [None,'--database','--cleanup','--resources','--process']:
+ for mode in [None,'--database','--cleanup','--resources','--process','--collection']:
   command=[binary]+([mode] if mode else [])+['--user','johnsmith','--output',str(stage),'--cookies',str(root/'missing.cookies.txt')]
   if mode=='--resources':command+=['--resource-file',str(root/'missing-artists.xml')]
-  if mode=='--process':command+=['--serverdir',str(server)]
+  if mode in ('--process','--collection'):command+=['--serverdir',str(server)]
   result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=10)
   assert result.returncode==0,result.stderr
   assert 'Stop file detected' in result.stderr
@@ -52,4 +60,4 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
  assert result.returncode==0,result.stderr
  assert not source.exists()
  assert list(server.rglob('*.flac'))
- print('Governor publication, persistent stop-file startup checks, and standalone cleanup passed with PATH=/nonexistent.')
+ print('Governor publication, offline collection tags, persistent stop-file startup checks, and standalone cleanup passed with PATH=/nonexistent.')

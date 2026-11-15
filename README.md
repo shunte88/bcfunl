@@ -12,6 +12,7 @@ of what is complete.
 - **Repeatable collection downloads.** SQLite history tracks successes and failures so later runs can focus on unfinished purchases.
 - **A verified music library.** Clean up tags and filenames, preserve artwork, and verify decoded audio before publishing releases.
 - **Parallel downloads and processing.** Run 2 to 8 releases at a time.
+- **Clean up music you already own.** Walk an existing music folder, improve tags offline, and keep filenames, artwork, and file modification dates.
 - **Better metadata.** Apply artist mappings, extract catalog numbers, filter invalid genre tags, and prefer confirmed Discogs release genres/styles.
 - **Scheduled maintenance.** Acquire, process, and clean successful downloads in one serialized workflow.
 
@@ -163,6 +164,37 @@ still provide genre defaults; refresh them to add detailed release matching.
 These examples keep your staged downloads. Add `--clean` after you are happy
 with the results. For existing extract files and more options, see the
 [Discogs resource guide](docs/REFERENCE.md#monthly-discogs-research-resources).
+
+### Tidy an existing music collection
+
+Have music from CDs, vinyl, or other download stores? Use `--collection` to clean
+its tags without moving or renaming anything. Refresh your Discogs library first
+so it includes the approved genre list:
+
+```sh
+./bcfunl --resources --output ./downloads
+
+./bcfunl --collection --serverdir /path/to/music \
+  --output ./downloads --library ./downloads/resources/library.sqlite3 \
+  --parallel 3 --count 10 --summary
+```
+
+Start with a small batch you have backed up. This updates the music files in
+place. File modification dates stay the same, existing artwork stays, and no
+new artwork is added. Extra named tags are kept. Supported files are FLAC, MP3,
+WAV, AIFF, M4A, and Ogg Vorbis; other formats and symbolic links are left alone.
+
+Matching Discogs releases can supply artist credits, composers, conductors,
+genres, dates, labels, and catalog numbers. Without a match, bcfunl tidies what
+it can safely identify. Unknown genres are removed: every retained genre must
+appear in the cleaned Discogs genre list. This mode makes no online requests.
+
+Choose `--parallel` from 3 to 16; the default is 3. Completed folders are recorded
+in `./downloads/collection.sqlite3` and skipped next time. Add `--force` to
+revisit them after refreshing the library or adding files to an existing folder.
+For several machines, give each a separate, nonoverlapping music folder and
+access to the local library. See the [collection guide](docs/REFERENCE.md#clean-an-existing-music-collection)
+for matching and safety details.
 
 ### Check and back up collection history
 

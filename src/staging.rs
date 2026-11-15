@@ -12,6 +12,13 @@ impl Drop for StagingLock {
 }
 
 pub(crate) fn lock(input: &Path) -> Result<StagingLock> {
+    acquire(input, false)
+}
+#[cfg(unix)]
+pub(crate) fn shared(input: &Path) -> Result<StagingLock> {
+    acquire(input, true)
+}
+fn acquire(input: &Path, shared: bool) -> Result<StagingLock> {
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     #[cfg(windows)]
@@ -27,8 +34,25 @@ pub(crate) fn lock(input: &Path) -> Result<StagingLock> {
         !lock.metadata()?.file_type().is_symlink(),
         "Staging lock is a symlink"
     );
-    lock.try_lock().context(
-        "Another download, process, clean, or database job holds the staging directory lock",
+    if shared { lock.try_lock_shared() } else { lock.try_lock() }.context(
+        "Another download, process, clean, database, or incompatible collection job holds the staging directory lock",
     )?;
     Ok(StagingLock(lock))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn collection_read_locks_exclude_maintenance_and_allow_peer_walkers() {
+        let dir = crate::processing::tempfile::tempdir().unwrap();
+        let a = super::shared(dir.path()).unwrap();
+        let b = super::shared(dir.path()).unwrap();
+        assert!(super::lock(dir.path()).is_err());
+        drop(a);
+        drop(b);
+        let writer = super::lock(dir.path()).unwrap();
+        assert!(super::shared(dir.path()).is_err());
+        drop(writer);
+        assert!(super::shared(dir.path()).is_ok());
+    }
 }

@@ -38,7 +38,9 @@ Treat cookie files `*.cookies.txt` as sensitive authentication material. Never p
 The bootstrap notes above predate the Rust application now present. CLI entry
 point: src/main.rs. Shared SQLite bindings: src/db.rs. Downloads/collection
 networking live under src/; offline media processing lives in src/processing/.
-Monthly Discogs artist/master resources and their tests live in src/resources.rs.
+Monthly Discogs artist/master/release resources, sanitized genre vocabulary, and
+their tests live in src/resources.rs. Existing-library tag walks live in
+src/processing/collection.rs and use the collection history table.
 Runtime mapping data lives under data/ and skill source under skills/. Resource
 outputs belong under <output>/resources/; never commit extracts or SQLite files.
 

@@ -82,6 +82,9 @@ fn generic(tag: &Tag) -> Tags {
     tags
 }
 pub(super) fn read_tags(path: &Path) -> Result<Tags> {
+    Ok(normalize_tags(raw_tags(path)?))
+}
+pub(super) fn raw_tags(path: &Path) -> Result<Tags> {
     let native = native(path)?;
     let mut tags = match &native {
         Native::Vorbis(comments) => {
@@ -128,7 +131,7 @@ pub(super) fn read_tags(path: &Path) -> Result<Tags> {
         }
         _ => (),
     }
-    Ok(normalize_tags(tags))
+    Ok(tags)
 }
 pub fn read(path: &Path) -> Result<(Tags, f64)> {
     crate::shutdown::check()?;
@@ -154,6 +157,7 @@ fn normalize_tags(mut tags: Tags) -> Tags {
         ("TRACK", "TRACKNUMBER"),
         ("DISC", "DISCNUMBER"),
         ("CATALOGID", "CATALOGNUMBER"),
+        ("CATALOGNO", "CATALOGNUMBER"),
         ("COUNTRY", "RELEASECOUNTRY"),
         ("YEAR", "DATE"),
         ("TRACKTOTAL", "TOTALTRACKS"),
@@ -329,4 +333,12 @@ pub fn picture(path: &Path) -> Result<Option<Vec<u8>>> {
         .flat_map(|t| t.pictures())
         .next()
         .map(|p| p.data().to_vec()))
+}
+
+pub(super) fn pictures(path: &Path) -> Result<Vec<lofty::picture::Picture>> {
+    Ok(lofty::read_from_path(path)?
+        .tags()
+        .iter()
+        .flat_map(|tag| tag.pictures().iter().cloned())
+        .collect())
 }

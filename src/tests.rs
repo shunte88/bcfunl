@@ -262,9 +262,54 @@ fn parallel_argument_bounds() {
     for value in ["2", "8"] {
         assert!(Args::try_parse_from(["bcfunl", "--parallel", value]).is_ok());
     }
-    for value in ["0", "1", "9", "-2", "fast"] {
+    for value in ["0", "1", "17", "-2", "fast"] {
         assert!(Args::try_parse_from(["bcfunl", "--parallel", value]).is_err());
     }
+    assert!(
+        Args::try_parse_from(["bcfunl", "--parallel", "9"])
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    for n in ["3", "16"] {
+        assert!(
+            Args::try_parse_from([
+                "bcfunl",
+                "--collection",
+                "--serverdir",
+                "music",
+                "--parallel",
+                n
+            ])
+            .unwrap()
+            .validate()
+            .is_ok()
+        );
+    }
+    assert!(
+        Args::try_parse_from([
+            "bcfunl",
+            "--collection",
+            "--serverdir",
+            "music",
+            "--parallel",
+            "2"
+        ])
+        .unwrap()
+        .validate()
+        .is_err()
+    );
+    assert!(Args::try_parse_from(["bcfunl", "--walk"]).is_err());
+    assert!(
+        Args::try_parse_from([
+            "bcfunl",
+            "--collection",
+            "--process",
+            "--serverdir",
+            "music"
+        ])
+        .is_err()
+    );
 }
 
 #[test]
