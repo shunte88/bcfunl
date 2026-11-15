@@ -9,7 +9,7 @@ this session has no general reminder/scheduling tool.
 
 
 Updated: 2026-11-14 (America/New_York)
-Local release: **v0.2.0**, in-place collection tagging; Docker/full-import/live-walk acceptance pending
+Local release: **v0.2.1**, selective resources and fast genre refresh; Docker/full-import/live-walk acceptance pending
 
 ## Current outcome
 
@@ -2968,3 +2968,62 @@ and artwork, supported formats, concurrency 3 through 16, history skips and
 --force guidance. Memory and status are current for v0.2.0. Native validation
 remains 176 passed, 0 failed, 5 ignored; Docker/full-import/live-walk acceptance
 is still pending. No runtime checks were repeated for this handoff-only update.
+
+## 2026-11-14 handoff: v0.2.1 selective resource refresh and genre-only testing
+
+Stue found rebuilding resources for the new genre table too expensive for tests
+and requested datestamps/sizes for selective file download/import. Added
+--resources --genres-only --output ROOT. It requires an existing resource
+library at ROOT/resources/library.sqlite3, makes no network requests and reads
+no extract files. No cookies or artist-map loading is needed. It refreshes the
+approved genre list transactionally and leaves artist/master/release records
+intact. Missing library fails without creating an empty database. Extract-file
+overrides conflict with --genres-only. --force with --genres-only rescans the
+library's saved classification fields rather than using the cached vocabulary.
+
+New genre_vocabulary table stores a small raw genre/style JSON array per masters
+and releases dataset. XML imports collect this once in a bounded BTreeSet while
+streaming; no extra release JSON scan is needed. Legacy libraries seed caches
+with a one-time SQL scan of their existing classification data. Future genre-only
+refreshes read these tiny caches. Empty/failed genre refreshes roll back and
+retain the prior approved dictionary. Existing collection mode uses the refreshed
+sanitized_genres table unchanged.
+
+resource_import adds source_size (bytes), source_modified (local UTC file mtime),
+snapshot_date (Discogs filename date), and source_signature. Provenance DDL
+migrates existing libraries. On Unix, verified digests can be reused when exact
+canonical path, size, mtime, device, inode and ctime match. Cache downloads still
+compare against the latest official checksum manifest. New/changed files are
+hashed; other platforms continue hashing. --resources --force rehashes and
+reimports all inputs. Metadata reuse cannot detect silent bit rot that leaves
+metadata unchanged; this limitation is documented and marked shortcut in code.
+
+Normal resource builds compare hashes per dataset. Unchanged snapshots skip XML
+imports; missing genre tables are built from existing library data. Changed
+subsets rebuild privately from a native SQLite backup, retain unchanged datasets
+and imported_at timestamps, update source file metadata even when bytes are the
+same, drop/rebuild only affected indexes, validate and atomically replace the
+library. When all datasets change, start fresh instead of copying the old DB.
+Master changes rebuild artist genre evidence; artist changes reapply that evidence
+without reimporting masters/releases. Source signatures are rechecked around
+hashing/import to reject mid-operation file edits. Original library survives
+failed imports. A partial rebuild still needs old+new database disk space and a
+copy of the existing library; genre-only mode avoids that cost.
+
+README/reference/container docs updated with the quick recipe, source metadata,
+cache behavior, monthly refresh and --force semantics. Compose now accepts the
+resources mode, so docker compose run --rm -T bcfunl resources --genres-only
+uses the configured staging root. Current local release v0.2.1, built
+2026-11-15T02:14:30Z (November 14 local time).
+
+Validation: 178 passed, 0 failed, 5 ignored; strict locked Clippy, formatting,
+locked optimized build, build-workflow regression, Compose config and actual
+CLI smoke all passed. Added tests prove genre refresh with deleted extracts,
+legacy provenance/genre-cache migration, selective master-only import preserving
+artist data/timestamps, file size/date capture, cached vocabulary reuse and
+empty refresh rollback. Existing atomic import/gzip CRC/idempotence tests pass.
+CLI smoke runs genre-only mode with PATH=/nonexistent and missing cookies, then
+original governed publication, collection walk, stop-file checks and cleanup.
+Full check-build.sh remains blocked at Docker daemon access. Live remote download,
+full monthly dataset performance, container image/package and media2026 acceptance
+remain unverified. No live data, jobs, remote deployment, commit or push changed.

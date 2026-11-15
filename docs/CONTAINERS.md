@@ -1252,3 +1252,16 @@ files or add artwork. Back up the music before trying it. The default is three
 workers; append `--parallel 16` for up to sixteen. Completed folders skip next
 time; `--force` revisits them. See the
 [collection guide](REFERENCE.md#clean-an-existing-music-collection) for details.
+
+### Refresh only the genre list
+
+With an existing local Discogs library and version 0.2.1, use:
+
+```sh
+docker compose run --rm -T bcfunl resources --genres-only
+```
+
+This skips extract downloads and XML imports. An older library needs a one-time
+scan of its saved genre/style data; later refreshes use the small genre cache.
+For the normal monthly update, omit `--genres-only`. Unchanged datasets are
+reused, and only changed ones are imported.

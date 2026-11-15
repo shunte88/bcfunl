@@ -134,6 +134,17 @@ It includes artists, album groups (called masters), and individual releases.
 The full download is large, so allow plenty of disk space and time for the first
 setup. Run the same command each month to refresh it.
 
+Already have a library and just need to refresh its genre/style list for testing?
+Skip the downloads and full import:
+
+```sh
+./bcfunl --resources --genres-only --output ./downloads
+```
+
+An older library needs one scan to build its genre cache. Later refreshes reuse
+that small cache. Normal monthly resource runs reuse unchanged files and import
+only changed datasets, keeping each file's date, size, and checksum on record.
+
 Next, process a small batch using only that library:
 
 ```sh
@@ -168,7 +179,7 @@ with the results. For existing extract files and more options, see the
 ### Tidy an existing music collection
 
 Have music from CDs, vinyl, or other download stores? Use `--collection` to clean
-its tags without moving or renaming anything. Refresh your Discogs library first
+its tags without moving or renaming anything. Build your Discogs library first
 so it includes the approved genre list:
 
 ```sh
@@ -178,6 +189,9 @@ so it includes the approved genre list:
   --output ./downloads --library ./downloads/resources/library.sqlite3 \
   --parallel 3 --count 10 --summary
 ```
+
+If the library is already built, use `--resources --genres-only` for the genre
+update instead of a full resource run.
 
 Start with a small batch you have backed up. This updates the music files in
 place. File modification dates stay the same, existing artwork stays, and no

@@ -547,7 +547,9 @@ Allow space for cached archives plus old and newly built databases during refres
 | `master_artists` | Ordered master credits, artist IDs, source names, name variations and join text |
 | `artist_genres` | Normalized combined genre/style value and supporting distinct-master count for each artist ID |
 | `artists.genres` | Default combined genre collection, ranked by supporting master count then name |
-| `resource_import` | Each input filename, SHA-256, import time, record count and observed XML field counts |
+| `resource_import` | Input filename, SHA-256, size, local modification timestamp, snapshot date, import time, record count, and observed XML field counts |
+| `genre_vocabulary` | Cached raw genre/style vocabulary for each classification dataset |
+| `sanitized_genres` | Approved, normalized and expanded genre/style values |
 
 Artist dumps contain no genre/style fields. Their profile text is retained as
 text, never used to guess genres. Masters provide the classifications. The
@@ -1309,3 +1311,36 @@ CPU/memory limits to cap collection jobs.
 
 With the supplied Compose file, `docker compose run --rm -T bcfunl collection`
 uses the configured music and staging paths, with three workers.
+
+### Refresh resources without repeating the full import
+
+```sh
+# Refresh approved genres/styles from the existing local database only.
+./bcfunl --resources --genres-only --output ./downloads
+```
+
+This requires `<output>/resources/library.sqlite3`. It makes no network requests,
+reads no extract files, and leaves artist/master/release records intact. The
+first refresh of an older library scans its existing genre/style fields once
+and caches the raw vocabulary in `genre_vocabulary`. Subsequent genre refreshes
+read that small cache. New XML imports collect the cache while streaming, so
+they need no separate database scan. `--genres-only --force` rebuilds that cache
+from the current database if its records were edited manually. Genre replacement
+is transactional; an empty or failed refresh retains the existing vocabulary.
+
+Normal `--resources` runs record `source_size` (bytes), `source_modified` (local
+UTC file timestamp), `snapshot_date` (date in the Discogs filename), and a local
+file signature alongside the existing SHA-256 in `resource_import`. Unchanged
+content skips XML imports. When only some datasets change, a private database
+copy retains unchanged datasets and imports only the changed ones, then checks
+and atomically replaces the library. If all datasets change, a fresh build
+avoids copying the old database. Replaced dataset indexes are rebuilt afterward.
+Allow disk space for the old and staged databases during a partial refresh.
+
+On Unix, an already verified hash can be reused when path, size, modification
+time, device, inode, and change time still match the recorded file. Downloads
+still check the current official checksum manifest; new or changed files are
+hashed. Metadata reuse cannot detect silent disk corruption with unchanged
+metadata. Use normal `--resources --force` to rehash files and reimport all
+datasets. Other platforms continue hashing files. Legacy libraries acquire the
+new source metadata on the next normal resource run.

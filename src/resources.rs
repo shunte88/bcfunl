@@ -56,7 +56,7 @@ fn expected_checksum(text: &str, name: &str) -> Result<String> {
         })
         .context("Resource dump is missing from Discogs SHA-256 manifest")
 }
-async fn acquire(root: &Path, temporary: &Path, kind: &str) -> Result<PathBuf> {
+async fn acquire(root: &Path, temporary: &Path, kind: &str, force: bool) -> Result<PathBuf> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("bcfunl/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
@@ -105,7 +105,15 @@ async fn acquire(root: &Path, temporary: &Path, kind: &str) -> Result<PathBuf> {
         .await?;
     let expected = expected_checksum(&manifest, &name)?;
     let target = root.join(&name);
-    if target.is_file() && sha256(&target)? == expected {
+    let library = root.join("library.sqlite3");
+    let previous = if library.is_file() {
+        Some(Database::read_only(
+            library.to_str().context("Library path is not UTF-8")?,
+        )?)
+    } else {
+        None
+    };
+    if target.is_file() && source_hash(&target, previous.as_ref(), force)? == expected {
         eprintln!("Verified cached {name}");
         return Ok(target);
     }
@@ -137,7 +145,7 @@ async fn acquire(root: &Path, temporary: &Path, kind: &str) -> Result<PathBuf> {
     drop(file);
     ensure!(
         sha256(&staged)? == expected,
-        "Discogs artist checksum mismatch"
+        "Discogs resource checksum mismatch"
     );
     fs::rename(&staged, &target)?;
     File::open(root)?.sync_all()?;
@@ -169,14 +177,15 @@ impl Frame {
 }
 fn schema(db: &Database) -> Result<()> {
     for sql in [
-        "CREATE TABLE artists (id INTEGER PRIMARY KEY CHECK(id>0),name TEXT NOT NULL,real_name TEXT,profile TEXT,data_quality TEXT,urls TEXT NOT NULL,name_variations TEXT NOT NULL,aliases TEXT NOT NULL,members TEXT NOT NULL,groups TEXT NOT NULL,genres TEXT,styles TEXT)",
-        "CREATE TABLE masters(id INTEGER PRIMARY KEY CHECK(id>0),title TEXT NOT NULL,main_release_id INTEGER,year INTEGER,data_quality TEXT,genres TEXT NOT NULL,styles TEXT NOT NULL)",
-        "CREATE TABLE master_artists(master_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,join_text TEXT,PRIMARY KEY(master_id,position))",
-        "CREATE TABLE artist_genres(artist_id INTEGER NOT NULL,genre TEXT COLLATE NOCASE NOT NULL,master_count INTEGER NOT NULL,PRIMARY KEY(artist_id,genre)) WITHOUT ROWID",
-        "CREATE TABLE sanitized_genres(genre TEXT PRIMARY KEY COLLATE NOCASE NOT NULL) WITHOUT ROWID",
-        "CREATE TABLE releases(id INTEGER PRIMARY KEY CHECK(id>0),master_id INTEGER,title TEXT NOT NULL,title_key TEXT NOT NULL,country TEXT,released TEXT,data TEXT NOT NULL)",
-        "CREATE TABLE release_artists(release_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,PRIMARY KEY(release_id,position))",
-        "CREATE TABLE resource_import(dataset TEXT PRIMARY KEY,source_file TEXT NOT NULL,source_sha256 TEXT NOT NULL,imported_at TEXT NOT NULL,record_count INTEGER NOT NULL,field_counts TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS artists (id INTEGER PRIMARY KEY CHECK(id>0),name TEXT NOT NULL,real_name TEXT,profile TEXT,data_quality TEXT,urls TEXT NOT NULL,name_variations TEXT NOT NULL,aliases TEXT NOT NULL,members TEXT NOT NULL,groups TEXT NOT NULL,genres TEXT,styles TEXT)",
+        "CREATE TABLE IF NOT EXISTS masters(id INTEGER PRIMARY KEY CHECK(id>0),title TEXT NOT NULL,main_release_id INTEGER,year INTEGER,data_quality TEXT,genres TEXT NOT NULL,styles TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS master_artists(master_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,join_text TEXT,PRIMARY KEY(master_id,position))",
+        "CREATE TABLE IF NOT EXISTS artist_genres(artist_id INTEGER NOT NULL,genre TEXT COLLATE NOCASE NOT NULL,master_count INTEGER NOT NULL,PRIMARY KEY(artist_id,genre)) WITHOUT ROWID",
+        "CREATE TABLE IF NOT EXISTS genre_vocabulary(dataset TEXT PRIMARY KEY,raw_genres TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS sanitized_genres(genre TEXT PRIMARY KEY COLLATE NOCASE NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE IF NOT EXISTS releases(id INTEGER PRIMARY KEY CHECK(id>0),master_id INTEGER,title TEXT NOT NULL,title_key TEXT NOT NULL,country TEXT,released TEXT,data TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS release_artists(release_id INTEGER NOT NULL,artist_id INTEGER,position INTEGER NOT NULL,name TEXT NOT NULL,anv TEXT,PRIMARY KEY(release_id,position))",
+        "CREATE TABLE IF NOT EXISTS resource_import(dataset TEXT PRIMARY KEY,source_file TEXT NOT NULL,source_sha256 TEXT NOT NULL,imported_at TEXT NOT NULL,record_count INTEGER NOT NULL,field_counts TEXT NOT NULL,source_size INTEGER,source_modified TEXT,snapshot_date TEXT,source_signature TEXT)",
     ] {
         db.query(sql, &[])?;
     }
@@ -289,6 +298,17 @@ fn save_release(db: &Database, release: &Frame) -> Result<()> {
     }
     Ok(())
 }
+fn record_genres(record: &Frame, genres: &mut BTreeSet<String>) {
+    for value in record.items("genres").iter().chain(record.items("styles")) {
+        if !value.text.trim().is_empty() {
+            genres.insert(value.text.trim().into());
+        }
+    }
+}
+fn cache_genres(db: &Database, dataset: &str, values: Value) -> Result<()> {
+    db.query("INSERT INTO genre_vocabulary VALUES(?,?) ON CONFLICT(dataset) DO UPDATE SET raw_genres=excluded.raw_genres",&[dataset,&values.to_string()])?;
+    Ok(())
+}
 fn import_releases(path: &Path, db: &Database) -> Result<(u64, BTreeMap<String, u64>)> {
     let mut file = File::open(path)?;
     let mut magic = [0; 2];
@@ -300,9 +320,13 @@ fn import_releases(path: &Path, db: &Database) -> Result<(u64, BTreeMap<String, 
     } else {
         Box::new(BufReader::new(file))
     };
-    stream(reader, "releases", "release", |record| {
+    let mut genres = BTreeSet::new();
+    let result = stream(reader, "releases", "release", |record| {
+        record_genres(record, &mut genres);
         save_release(db, record)
-    })
+    })?;
+    cache_genres(db, "releases", json!(genres))?;
+    Ok(result)
 }
 
 fn save_master(db: &Database, master: &Frame, map: &vcw_metadata::Genres) -> Result<()> {
@@ -476,7 +500,13 @@ fn import_source(
     let map = vcw_metadata::Genres::builtin();
     let parse = |reader: Box<dyn BufRead>| {
         if masters {
-            stream(reader, "masters", "master", |m| save_master(db, m, &map))
+            let mut genres = BTreeSet::new();
+            let result = stream(reader, "masters", "master", |m| {
+                record_genres(m, &mut genres);
+                save_master(db, m, &map)
+            })?;
+            cache_genres(db, "masters", json!(genres))?;
+            Ok(result)
         } else {
             import(reader, db)
         }
@@ -490,6 +520,138 @@ fn import_source(
     }
 }
 
+#[derive(Debug)]
+struct SourceInfo {
+    size: String,
+    modified: String,
+    date: String,
+    signature: String,
+}
+fn source_info(path: &Path) -> Result<SourceInfo> {
+    let meta = fs::metadata(path)?;
+    ensure!(meta.is_file(), "Resource source is not a regular file");
+    let modified = chrono::DateTime::<Utc>::from(meta.modified()?)
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let date = name
+        .split('_')
+        .nth(1)
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y%m%d").ok())
+        .map(|d| d.to_string())
+        .unwrap_or_default();
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        json!([meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()])
+    };
+    #[cfg(not(unix))]
+    let identity = Value::Null;
+    let stamp = json!({"path":path.canonicalize()?,"size":meta.len(),"modified":modified,"identity":identity});
+    Ok(SourceInfo {
+        size: meta.len().to_string(),
+        modified,
+        date,
+        signature: stamp.to_string(),
+    })
+}
+fn provenance_schema(db: &Database) -> Result<()> {
+    let columns = db.query("PRAGMA table_info(resource_import)", &[])?;
+    for (name, kind) in [
+        ("source_size", "INTEGER"),
+        ("source_modified", "TEXT"),
+        ("snapshot_date", "TEXT"),
+        ("source_signature", "TEXT"),
+    ] {
+        if !columns.iter().any(|row| row[1].as_deref() == Some(name)) {
+            db.query(
+                &format!("ALTER TABLE resource_import ADD COLUMN {name} {kind}"),
+                &[],
+            )?;
+        }
+    }
+    Ok(())
+}
+fn remember_source(db: &Database, kind: &str, path: &Path, info: &SourceInfo) -> Result<()> {
+    db.query("UPDATE resource_import SET source_file=?,source_size=?,source_modified=?,snapshot_date=NULLIF(?,''),source_signature=? WHERE dataset=? AND source_signature IS NOT ?",&[&path.file_name().unwrap_or_default().to_string_lossy(),&info.size,&info.modified,&info.date,&info.signature,kind,&info.signature])?;
+    Ok(())
+}
+fn source_hash(path: &Path, previous: Option<&Database>, force: bool) -> Result<String> {
+    // shortcut: unchanged metadata cannot detect silent bit rot; --force rehashes the files.
+    if !force
+        && cfg!(unix)
+        && let Some(db) = previous
+    {
+        let info = source_info(path)?;
+        // Older libraries have no signature; verify bytes once before trusting metadata reuse.
+        if db
+            .query("PRAGMA table_info(resource_import)", &[])?
+            .iter()
+            .any(|row| row[1].as_deref() == Some("source_signature"))
+        {
+            let rows=db.query("SELECT source_sha256 FROM resource_import WHERE source_file=? AND source_signature=?",&[&path.file_name().unwrap_or_default().to_string_lossy(),&info.signature])?;
+            if let Some(hash) = rows.first().and_then(|row| row[0].clone()) {
+                return Ok(hash);
+            }
+        }
+    }
+    sha256(path)
+}
+fn refresh_genres(db: &Database, rescan: bool) -> Result<usize> {
+    eprintln!("Refreshing approved genres/styles from the local library");
+    db.query("CREATE TABLE IF NOT EXISTS sanitized_genres(genre TEXT PRIMARY KEY COLLATE NOCASE NOT NULL) WITHOUT ROWID",&[])?;
+    let mut raw = Vec::<String>::new();
+    for dataset in ["masters", "releases"] {
+        let cached = db.query(
+            "SELECT raw_genres FROM genre_vocabulary WHERE dataset=?",
+            &[dataset],
+        )?;
+        let values = if !rescan && let Some(text) = cached.first().and_then(|row| row[0].as_deref())
+        {
+            serde_json::from_str::<Vec<String>>(text)?
+        } else {
+            eprintln!("Collecting {dataset} genre/style vocabulary (one database scan)");
+            let sql = if dataset == "masters" {
+                "SELECT DISTINCT value FROM masters,json_each(masters.genres) UNION SELECT DISTINCT value FROM masters,json_each(masters.styles)"
+            } else {
+                "SELECT DISTINCT value FROM releases,json_each(releases.data,'$.genres') UNION SELECT DISTINCT value FROM releases,json_each(releases.data,'$.styles')"
+            };
+            let values = db
+                .query(sql, &[])?
+                .into_iter()
+                .filter_map(|row| row[0].clone())
+                .collect::<Vec<_>>();
+            cache_genres(db, dataset, json!(values))?;
+            values
+        };
+        raw.extend(values);
+    }
+    let genres = crate::genres::normalize(raw, &[]);
+    ensure!(
+        !genres.is_empty(),
+        "No usable Discogs genres/styles found; existing vocabulary retained"
+    );
+    db.query("DELETE FROM sanitized_genres", &[])?;
+    for genre in &genres {
+        db.query("INSERT OR IGNORE INTO sanitized_genres VALUES(?)", &[genre])?;
+    }
+    Ok(genres.len())
+}
+
+fn genres_only(target: &Path, rescan: bool) -> Result<()> {
+    ensure!(
+        target.is_file(),
+        "--genres-only requires an existing resource library; import resources first"
+    );
+    let db = Database::connect(target.to_str().context("Library path is not UTF-8")?)?;
+    db.query("BEGIN IMMEDIATE", &[])?;
+    schema(&db)?;
+    provenance_schema(&db)?;
+    let count = refresh_genres(&db, rescan)?;
+    shutdown::check()?;
+    db.query("COMMIT", &[])?;
+    eprintln!("Genre library ready: {count} approved genres/styles; no downloads or XML imports");
+    Ok(())
+}
 fn build_full(
     source: &Path,
     masters: &Path,
@@ -498,100 +660,122 @@ fn build_full(
     releases: Option<&Path>,
     force: bool,
 ) -> Result<(u64, u64)> {
-    let hash = sha256(source)?;
-    let master_hash = sha256(masters)?;
-    let release_hash = releases.map(sha256).transpose()?;
-    if target.is_file() && !force {
-        let db = Database::connect(target.to_str().context("Library path is not UTF-8")?)?;
-        let rows=db.query("SELECT record_count FROM resource_import WHERE dataset='artists' AND source_sha256=? AND EXISTS(SELECT 1 FROM resource_import WHERE dataset='masters' AND source_sha256=?)",&[&hash,&master_hash])?;
-        let releases_current = match &release_hash {
-            Some(hash) => !db
-                .query(
-                    "SELECT 1 FROM resource_import WHERE dataset='releases' AND source_sha256=?",
-                    &[hash],
-                )?
-                .is_empty(),
-            None => true,
+    let previous = if target.is_file() {
+        Some(Database::read_only(
+            target.to_str().context("Library path is not UTF-8")?,
+        )?)
+    } else {
+        None
+    };
+    let mut inputs = vec![("artists", source), ("masters", masters)];
+    if let Some(path) = releases {
+        inputs.push(("releases", path));
+    }
+    let mut sources = Vec::new();
+    for (kind, path) in inputs {
+        let info = source_info(path)?;
+        let hash = source_hash(path, previous.as_ref(), force)?;
+        ensure!(
+            source_info(path)?.signature == info.signature,
+            "Resource source changed while checking it"
+        );
+        let unchanged = if let Some(db) = &previous {
+            !force
+                && !db
+                    .query(
+                        "SELECT 1 FROM resource_import WHERE dataset=? AND source_sha256=?",
+                        &[kind, &hash],
+                    )?
+                    .is_empty()
+        } else {
+            false
         };
-        let genre_schema = !db
+        sources.push((kind, path, hash, info, unchanged));
+    }
+    if sources.iter().all(|s| s.4) {
+        let db = Database::connect(target.to_str().unwrap())?;
+        db.query("BEGIN IMMEDIATE", &[])?;
+        provenance_schema(&db)?;
+        let genres_present = !db
             .query(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sanitized_genres'",
                 &[],
             )?
             .is_empty();
-        if let Some(row) = rows.first().filter(|_| releases_current && genre_schema) {
-            eprintln!("Library already contains these snapshots");
-            let n = db.query(
-                "SELECT record_count FROM resource_import WHERE dataset='masters'",
-                &[],
-            )?;
-            return Ok((
-                row[0].as_deref().unwrap_or("0").parse()?,
-                n[0][0].as_deref().unwrap_or("0").parse()?,
-            ));
+        schema(&db)?;
+        if !genres_present {
+            refresh_genres(&db, false)?;
         }
+        for (kind, path, _, info, _) in &sources {
+            remember_source(&db, kind, path, info)?;
+        }
+        shutdown::check()?;
+        db.query("COMMIT", &[])?;
+        eprintln!("Library already contains these snapshots; XML imports skipped");
+        return resource_counts(&db);
     }
     let staged = temporary.join("library.sqlite3");
+    if let Some(db) = &previous
+        && (sources.iter().any(|s| s.4) || releases.is_none())
+    {
+        db.backup_to(staged.to_str().context("Library path is not UTF-8")?)?;
+    }
     let db = Database::connect(staged.to_str().context("Library path is not UTF-8")?)?;
     db.query("PRAGMA journal_mode=DELETE", &[])?;
     db.query("PRAGMA synchronous=FULL", &[])?;
     db.query("PRAGMA cache_size=-65536", &[])?;
     schema(&db)?;
+    provenance_schema(&db)?;
     db.query("BEGIN IMMEDIATE", &[])?;
-    let mut counts = BTreeMap::new();
-    for (kind, path, digest) in [
-        ("masters", masters, &master_hash),
-        ("artists", source, &hash),
-    ] {
-        eprintln!("Importing {kind} from {}", path.display());
-        let (count, fields) = import_source(path, &db, kind == "masters")?;
-        db.query(
-            "INSERT INTO resource_import VALUES(?,?,?,?,?,?)",
-            &[
-                kind,
-                &path.file_name().unwrap_or_default().to_string_lossy(),
-                digest,
-                &Utc::now().to_rfc3339(),
-                &count.to_string(),
-                &json!(fields).to_string(),
+    for (kind, path, hash, info, unchanged) in &sources {
+        if *unchanged {
+            eprintln!("Reusing unchanged {kind}");
+            remember_source(&db, kind, path, info)?;
+            continue;
+        }
+        let tables: &[&str] = match *kind {
+            "artists" => &["artists"],
+            "masters" => &["master_artists", "artist_genres", "masters"],
+            _ => &["release_artists", "releases"],
+        };
+        let indexes: &[&str] = match *kind {
+            "artists" => &["artists_name", "artists_real_name"],
+            "masters" => &["master_artist_lookup", "masters_title"],
+            _ => &[
+                "releases_title_key",
+                "releases_master",
+                "release_artist_lookup",
             ],
-        )?;
-        counts.insert(kind, count);
+        };
+        for index in indexes {
+            db.query(&format!("DROP INDEX IF EXISTS {index}"), &[])?;
+        }
+        for table in tables {
+            db.query(&format!("DELETE FROM {table}"), &[])?;
+        }
+        eprintln!("Importing changed {kind} from {}", path.display());
+        let (count, fields) = if *kind == "releases" {
+            import_releases(path, &db)?
+        } else {
+            import_source(path, &db, *kind == "masters")?
+        };
+        ensure!(
+            source_info(path)?.signature == info.signature,
+            "Resource source changed during import"
+        );
+        db.query("INSERT INTO resource_import(dataset,source_file,source_sha256,imported_at,record_count,field_counts,source_size,source_modified,snapshot_date,source_signature) VALUES(?,?,?,?,?,?,?,?,NULLIF(?,''),?) ON CONFLICT(dataset) DO UPDATE SET source_file=excluded.source_file,source_sha256=excluded.source_sha256,imported_at=excluded.imported_at,record_count=excluded.record_count,field_counts=excluded.field_counts,source_size=excluded.source_size,source_modified=excluded.source_modified,snapshot_date=excluded.snapshot_date,source_signature=excluded.source_signature",&[kind,&path.file_name().unwrap_or_default().to_string_lossy(),hash,&Utc::now().to_rfc3339(),&count.to_string(),&json!(fields).to_string(),&info.size,&info.modified,&info.date,&info.signature])?;
     }
-    if let Some(path) = releases {
-        eprintln!("Importing detailed releases from {}", path.display());
-        let (count, fields) = import_releases(path, &db)?;
-        db.query(
-            "INSERT INTO resource_import VALUES('releases',?,?,?,?,?)",
-            &[
-                &path.file_name().unwrap_or_default().to_string_lossy(),
-                release_hash.as_deref().unwrap(),
-                &Utc::now().to_rfc3339(),
-                &count.to_string(),
-                &json!(fields).to_string(),
-            ],
-        )?;
-    }
-    eprintln!("Building sanitized genre vocabulary");
-    let raw = db.query("SELECT DISTINCT value FROM masters,json_each(masters.genres) UNION SELECT DISTINCT value FROM masters,json_each(masters.styles) UNION SELECT DISTINCT value FROM releases,json_each(releases.data,'$.genres') UNION SELECT DISTINCT value FROM releases,json_each(releases.data,'$.styles')", &[])?;
-    let values = raw.iter().filter_map(|row| row[0].as_deref());
-    for genre in crate::genres::normalize(values, &[]) {
-        db.query(
-            "INSERT OR IGNORE INTO sanitized_genres VALUES(?)",
-            &[&genre],
-        )?;
-    }
-    eprintln!("Building artist genre defaults and indexes");
-    db.query("UPDATE artists SET genres=(SELECT json_group_array(genre) FROM (SELECT genre FROM artist_genres WHERE artist_id=artists.id ORDER BY master_count DESC,genre COLLATE NOCASE)) WHERE EXISTS(SELECT 1 FROM artist_genres WHERE artist_id=artists.id)",&[])?;
+    refresh_genres(&db, false)?;
+    db.query("UPDATE artists SET genres=CASE WHEN EXISTS(SELECT 1 FROM artist_genres WHERE artist_id=artists.id) THEN (SELECT json_group_array(genre) FROM (SELECT genre FROM artist_genres WHERE artist_id=artists.id ORDER BY master_count DESC,genre COLLATE NOCASE)) ELSE NULL END",&[])?;
     db.query("COMMIT", &[])?;
     for sql in [
-        "CREATE INDEX artists_name ON artists(name COLLATE NOCASE)",
-        "CREATE INDEX artists_real_name ON artists(real_name COLLATE NOCASE) WHERE real_name IS NOT NULL",
-        "CREATE INDEX master_artist_lookup ON master_artists(artist_id,master_id)",
-        "CREATE INDEX masters_title ON masters(title COLLATE NOCASE)",
-        "CREATE INDEX releases_title_key ON releases(title_key,id)",
-        "CREATE INDEX releases_master ON releases(master_id,id)",
-        "CREATE INDEX release_artist_lookup ON release_artists(artist_id,release_id)",
+        "CREATE INDEX IF NOT EXISTS artists_name ON artists(name COLLATE NOCASE)",
+        "CREATE INDEX IF NOT EXISTS artists_real_name ON artists(real_name COLLATE NOCASE) WHERE real_name IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS master_artist_lookup ON master_artists(artist_id,master_id)",
+        "CREATE INDEX IF NOT EXISTS masters_title ON masters(title COLLATE NOCASE)",
+        "CREATE INDEX IF NOT EXISTS releases_title_key ON releases(title_key,id)",
+        "CREATE INDEX IF NOT EXISTS releases_master ON releases(master_id,id)",
+        "CREATE INDEX IF NOT EXISTS release_artist_lookup ON release_artists(artist_id,release_id)",
     ] {
         db.query(sql, &[])?;
     }
@@ -599,13 +783,30 @@ fn build_full(
         db.query("PRAGMA quick_check", &[])? == vec![vec![Some("ok".into())]],
         "Library integrity check failed"
     );
+    let counts = resource_counts(&db)?;
     drop(db);
+    drop(previous);
     shutdown::check()?;
     File::open(&staged)?.sync_all()?;
     fs::rename(&staged, target)?;
     File::open(target.parent().unwrap())?.sync_all()?;
-    Ok((counts["artists"], counts["masters"]))
+    Ok(counts)
 }
+fn resource_counts(db: &Database) -> Result<(u64, u64)> {
+    let count = |kind| -> Result<u64> {
+        Ok(db
+            .query(
+                "SELECT record_count FROM resource_import WHERE dataset=?",
+                &[kind],
+            )?
+            .first()
+            .and_then(|row| row[0].as_deref())
+            .unwrap_or("0")
+            .parse()?)
+    };
+    Ok((count("artists")?, count("masters")?))
+}
+
 #[cfg(test)]
 fn build(
     source: &Path,
@@ -626,21 +827,30 @@ pub fn run(args: &Args) -> Result<()> {
         .open(root.join(".resources.lock"))?;
     lock.try_lock()
         .context("Another resource import is running")?;
+    if args.genres_only {
+        return genres_only(&root.join("library.sqlite3"), args.force);
+    }
     let temporary = tempfile::tempdir_in(&root)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let source = match &args.resource_file {
         Some(p) => p.clone(),
-        None => {
-            runtime.block_on(shutdown::until(acquire(&root, temporary.path(), "artists")))??
-        }
+        None => runtime.block_on(shutdown::until(acquire(
+            &root,
+            temporary.path(),
+            "artists",
+            args.force,
+        )))??,
     };
     let masters = match &args.master_file {
         Some(p) => p.clone(),
-        None => {
-            runtime.block_on(shutdown::until(acquire(&root, temporary.path(), "masters")))??
-        }
+        None => runtime.block_on(shutdown::until(acquire(
+            &root,
+            temporary.path(),
+            "masters",
+            args.force,
+        )))??,
     };
     let releases = match &args.release_file {
         Some(path) => path.clone(),
@@ -648,6 +858,7 @@ pub fn run(args: &Args) -> Result<()> {
             &root,
             temporary.path(),
             "releases",
+            args.force,
         )))??,
     };
     let (artists, masters) = build_full(
@@ -679,6 +890,134 @@ mod tests {
     const MASTERS: &str = r#"<masters><master id="10"><main_release>100</main_release><artists><artist><id>1</id><name>A &amp; B</name></artist></artists><genres><genre>Electronic</genre></genres><styles><style>Acid House</style></styles><year>2026</year><title>Proof</title></master></masters>"#;
     const XML: &str = r#"<artists><artist><id>1</id><name>A &amp; B</name><realname>Real Name</realname><profile><![CDATA[Not a genre: jazz & folk]]></profile><data_quality>Correct</data_quality><urls><url>https://example.org</url></urls><namevariations><name>A and B</name></namevariations><aliases><name id="22">Alias</name></aliases><members><id>33</id><name id="44" active="false">Former</name></members><groups><name id="55">Group</name></groups></artist><artist><id>2</id><data_quality>Needs Vote</data_quality></artist></artists>"#;
     const RELEASES: &str = r#"<releases><release id="100" status="Accepted"><title>Proof (2026 Remaster)</title><master_id is_main_release="true">10</master_id><artists><artist><id>1</id><name>A &amp; B</name><anv>A and B</anv></artist></artists><country>Worldwide</country><released>2026-01-01</released><labels><label name="Fixture" catno="ABC-1"/></labels><genres><genre>Electronic</genre></genres><styles><style>Ambient</style></styles><extraartists><artist><name>Composer One</name><role>Composed By</role><tracks/></artist></extraartists><tracklist><track><position>A1</position><title>Track</title><artists><artist><name>Track Artist</name></artist></artists></track></tracklist><notes>Retain notes</notes></release></releases>"#;
+    #[test]
+    fn selective_import_tracks_file_metadata_and_genres_need_no_extracts() {
+        let root = tempfile::tempdir().unwrap();
+        let artists = root.path().join("discogs_20261101_artists.xml");
+        let masters = root.path().join("discogs_20261101_masters.xml");
+        let releases = root.path().join("discogs_20261101_releases.xml");
+        let target = root.path().join("library.sqlite3");
+        fs::write(&artists, XML).unwrap();
+        fs::write(&masters, MASTERS).unwrap();
+        fs::write(&releases, RELEASES).unwrap();
+        let work = tempfile::tempdir_in(root.path()).unwrap();
+        build_full(
+            &artists,
+            &masters,
+            &target,
+            work.path(),
+            Some(&releases),
+            false,
+        )
+        .unwrap();
+        let db = Database::connect(target.to_str().unwrap()).unwrap();
+        let rows=db.query("SELECT source_size,source_modified,snapshot_date,source_signature FROM resource_import",&[]).unwrap();
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert!(row[0].as_deref().unwrap().parse::<u64>().unwrap() > 0);
+            assert!(row[1].as_deref().unwrap().ends_with('Z'));
+            assert_eq!(row[2].as_deref(), Some("2026-11-01"));
+            assert!(row[3].is_some());
+        }
+        let old = db
+            .query(
+                "SELECT imported_at FROM resource_import WHERE dataset='artists'",
+                &[],
+            )
+            .unwrap();
+        db.query(
+            "UPDATE artists SET profile='Keep unchanged artist data' WHERE id=1",
+            &[],
+        )
+        .unwrap();
+        db.query("DROP TABLE sanitized_genres", &[]).unwrap();
+        db.query("DROP TABLE genre_vocabulary", &[]).unwrap();
+        db.query("ALTER TABLE resource_import RENAME TO old_provenance", &[])
+            .unwrap();
+        db.query("CREATE TABLE resource_import(dataset TEXT PRIMARY KEY,source_file TEXT NOT NULL,source_sha256 TEXT NOT NULL,imported_at TEXT NOT NULL,record_count INTEGER NOT NULL,field_counts TEXT NOT NULL)",&[]).unwrap();
+        db.query("INSERT INTO resource_import SELECT dataset,source_file,source_sha256,imported_at,record_count,field_counts FROM old_provenance",&[]).unwrap();
+        db.query("DROP TABLE old_provenance", &[]).unwrap();
+        drop(db);
+        fs::remove_file(&artists).unwrap();
+        fs::remove_file(&masters).unwrap();
+        fs::remove_file(&releases).unwrap();
+        genres_only(&target, false).unwrap();
+        fs::write(&artists, XML).unwrap();
+        fs::write(&masters, MASTERS.replace("Proof", "Changed Master")).unwrap();
+        fs::write(&releases, RELEASES).unwrap();
+        let work = tempfile::tempdir_in(root.path()).unwrap();
+        build_full(
+            &artists,
+            &masters,
+            &target,
+            work.path(),
+            Some(&releases),
+            false,
+        )
+        .unwrap();
+        let db = Database::read_only(target.to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.query("SELECT profile FROM artists WHERE id=1", &[])
+                .unwrap()[0][0]
+                .as_deref(),
+            Some("Keep unchanged artist data")
+        );
+        assert_eq!(
+            db.query("SELECT title FROM masters WHERE id=10", &[])
+                .unwrap()[0][0]
+                .as_deref(),
+            Some("Changed Master")
+        );
+        assert_eq!(
+            db.query(
+                "SELECT imported_at FROM resource_import WHERE dataset='artists'",
+                &[]
+            )
+            .unwrap(),
+            old
+        );
+        assert!(
+            !db.query(
+                "SELECT genre FROM sanitized_genres WHERE genre='Ambient'",
+                &[]
+            )
+            .unwrap()
+            .is_empty()
+        );
+        drop(db);
+        let missing = root.path().join("missing.sqlite3");
+        assert!(genres_only(&missing, false).is_err());
+        assert!(!missing.exists());
+    }
+    #[test]
+    fn legacy_genre_cache_is_built_once_and_empty_refresh_rolls_back() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("library.sqlite3");
+        let db = Database::connect(target.to_str().unwrap()).unwrap();
+        schema(&db).unwrap();
+        db.query(r#"INSERT INTO masters VALUES(1,'Proof',NULL,NULL,NULL,'["Electronic"]','["Ambient"]')"#,&[]).unwrap();
+        db.query("DROP TABLE genre_vocabulary", &[]).unwrap();
+        drop(db);
+        genres_only(&target, false).unwrap();
+        let db = Database::connect(target.to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.query("SELECT count(*) FROM genre_vocabulary", &[])
+                .unwrap()[0][0]
+                .as_deref(),
+            Some("2")
+        );
+        db.query("DELETE FROM masters", &[]).unwrap();
+        drop(db);
+        genres_only(&target, false).unwrap();
+        assert!(genres_only(&target, true).is_err());
+        let db = Database::read_only(target.to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.query("SELECT count(*) FROM sanitized_genres", &[])
+                .unwrap()[0][0]
+                .as_deref(),
+            Some("2")
+        );
+    }
     #[test]
     fn detailed_releases_preserve_metadata_match_offline_and_rebuild_safely() {
         let root = tempfile::tempdir().unwrap();
@@ -878,6 +1217,14 @@ mod tests {
             vec!["bcfunl", "--resources", "--process"],
             vec!["bcfunl", "--resources", "--artist", "A"],
             vec!["bcfunl", "--resource-file", "a.xml"],
+            vec!["bcfunl", "--genres-only"],
+            vec![
+                "bcfunl",
+                "--resources",
+                "--genres-only",
+                "--resource-file",
+                "a.xml",
+            ],
         ] {
             assert!(Args::try_parse_from(options).is_err());
         }

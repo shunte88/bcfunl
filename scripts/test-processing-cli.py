@@ -17,6 +17,11 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
   body={'title':'Governor Proof','artists':[{'name':'Fixture'}],'country':'Worldwide','labels':[{'name':'Fixture Label','catno':'LOCAL-1'}],'genres':['Electronic'],'styles':['Ambient']}
   db.execute('INSERT INTO releases VALUES(?,?,?)',(1,'governor proof',json.dumps(body)))
  env=dict(os.environ,PATH='/nonexistent')
+ result=subprocess.run([binary,'--resources','--genres-only','--output',str(stage),'--cookies',str(root/'missing.cookies.txt')],env=env,capture_output=True,text=True,timeout=20)
+ assert result.returncode==0,result.stderr
+ assert 'no downloads or XML imports' in result.stderr
+ with sqlite3.connect(library) as db:
+  assert db.execute('SELECT count(*) FROM sanitized_genres').fetchone()[0]==2
  before=resource.getrusage(resource.RUSAGE_CHILDREN);started=time.monotonic()
  result=subprocess.run([binary,'--process','--offline','--nice','20','--parallel','8','--user','johnsmith','--output',str(stage),'--serverdir',str(server),'--count','1','--summary'],env=env,capture_output=True,text=True,timeout=60)
  elapsed=time.monotonic()-started;after=resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -60,4 +65,4 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
  assert result.returncode==0,result.stderr
  assert not source.exists()
  assert list(server.rglob('*.flac'))
- print('Governor publication, offline collection tags, persistent stop-file startup checks, and standalone cleanup passed with PATH=/nonexistent.')
+ print('Genre-only refresh, governor publication, offline collection tags, persistent stop-file startup checks, and standalone cleanup passed with PATH=/nonexistent.')

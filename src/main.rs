@@ -120,6 +120,9 @@ struct Args {
     /// Import an existing Discogs artists XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
     resource_file: Option<PathBuf>,
+    /// Refresh only the approved genre/style list from the existing local library
+    #[arg(long, requires = "resources", conflicts_with_all = ["resource_file", "master_file", "release_file"])]
+    genres_only: bool,
     /// Import an existing Discogs masters XML or XML.gz instead of downloading
     #[arg(long, requires = "resources")]
     master_file: Option<PathBuf>,

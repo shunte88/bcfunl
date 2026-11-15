@@ -93,6 +93,12 @@ services:
               "$$@"
             ;;
 
+          resources)
+            exec /app/bcfunl --resources \
+              --output "$${BCFUNL_STAGING}" \
+              "$$@"
+            ;;
+
           collection)
             exec /app/bcfunl --collection \
               --output "$${BCFUNL_STAGING}" \
@@ -123,7 +129,7 @@ services:
             ;;
 
           *)
-            echo "Usage: bcfunl database|acquire|process|cleanup|collection [extra arguments]" >&2
+            echo "Usage: bcfunl database|acquire|process|cleanup|collection|resources [extra arguments]" >&2
             exit 2
             ;;
         esac
