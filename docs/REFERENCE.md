@@ -57,7 +57,7 @@ Options:
 | `--user` | Bandcamp username; specify the collection owner explicitly in scripts and examples. |
 | `--artist` | Case-insensitive artist substring; offline SQL supports LIKE wildcards. Download mode uses Search my Collection and checks returned artist names; processing filters stored artists. |
 | `--cookies` | Cookie export; defaults to `bandcamp.cookies.txt`. |
-| `--fromdt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
+| `--fromdt` | UTC date, `YYYY-MM-DD`: inclusive purchase start normally; strict media-modified-after cutoff for `--collection`, defaulting to two calendar months ago. |
 | `--todt` | Inclusive UTC **purchase** date, `YYYY-MM-DD`. |
 | `--count` | Maximum new release attempts; omitted means all. Eligible retries/deferred checks run afterward, outside this limit. Completed entries and missing links do not consume it. |
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
@@ -1283,15 +1283,27 @@ performer, album artist, sort fields, catalog alias, and year are filled only
 where existing tags provide the value. Unknown genres are removed. No track
 number or artwork is invented.
 
-Before replacement, a private copy in the same folder is tagged and checked
-against the original decoded audio, every embedded picture, and requested tags.
-Replacement is atomic per file. Ownership, standard permissions, and modification
-time (including subsecond precision) are retained; Linux extended attributes
-are copied too. Read-only or hard-linked media requires review. Files changed
-by another writer during the operation are rejected. Completed file updates
-are not rolled back if another file in the folder fails. Back up the music
-before the first walk. A killed process may leave a private temporary folder;
-the original path is not replaced before verification.
+Collection updates write metadata directly through the existing native tag
+backend, then check tag readback. There is no application-created audio copy,
+PCM decoding/hash comparison, artwork comparison pass, replacement rename, or
+forced file/directory sync for each track. Unchanged metadata skips writing.
+The backend preserves existing artwork and named tags; tests verify audio and
+artwork preservation across supported formats without imposing those scans on
+every live file. The backend may still need to move data when a container's
+metadata grows beyond its available padding.
+
+Original modification and access timestamps are restored after the write,
+including when writing or readback returns an error. Normal edits retain the
+same file inode, ownership, permissions and extended attributes. Read-only and
+hard-linked files still require review. Existing file locks and stale-tag checks
+remain. No copy is retained for rollback: a failed write may have changed tags.
+Failed folders remain retryable, and completed files are not rolled back.
+
+Once a metadata write starts, trigger-file, SIGINT and SIGTERM cancellation is
+deferred on that worker until writing, readback and timestamp restoration finish.
+Other workers still see the stop and do not start new updates. Forced termination
+(such as SIGKILL), power loss or storage failure can interrupt a direct write.
+Staged `--process` publication retains its separate copy/audio-verification path.
 
 History lives in `<output>/collection.sqlite3`, separate from the Discogs
 reference database. The new `collection` table records `path`, `artist`, `title`,
@@ -1403,3 +1415,27 @@ ORDER BY id;
 Matching still validates the credited artist and title, and respects an existing
 `DISCOGSMASTERID`. A master is an album group, not proof of which pressing is
 owned. Its main-release ID is never treated as the owned release ID.
+
+### Collection modification-date window
+
+Collection mode accepts `--fromdt` as a hard UTC media-file modification-date
+cutoff. Without it, the cutoff is today minus two calendar months, clamping to
+the last valid day when needed. On November 15, 2026 the default is September
+15, 2026. Only files dated September 16 onward qualify; the cutoff day itself
+is excluded. `--todt` remains unsupported for collection walks. Other modes
+keep their existing inclusive purchase-date behavior and no automatic window.
+
+A folder/release qualifies when any supported media file has a modification
+date after the cutoff. The whole folder is then processed so its release tags
+stay consistent. Directory, artwork and sidecar timestamps are not used. The
+window is checked from filesystem metadata before media-tag reads, library
+lookups or updates. Excluded folders do not consume `--count` slots and appear
+as outside the date window in the summary. `--force` cannot bypass this filter.
+Use an explicit early date, such as `--fromdt 1900-01-01`, for historical work.
+
+Existing history skips a qualifying folder only when its last successful
+`walk_date` is at least as recent as its newest media modification timestamp.
+Later external edits therefore make it eligible again without `--force`.
+Collection tag writes still preserve modification times, so they do not make
+old releases look new. The walk must still enumerate folders and read file
+timestamps; it cannot safely prune using parent-directory timestamps.

@@ -77,7 +77,9 @@ See [format selection](docs/REFERENCE.md#format-and-files) for fallback rules.
 ```
 
 Either date bound can be supplied alone. Dates are inclusive **purchase dates**.
-Artist/date filters and `--count` also work with processing and cleanup.
+Artist/date filters and `--count` also work with staged processing and cleanup.
+Collection walks use media modification dates instead of purchase dates, as
+explained below.
 Acquisition and processing attempt new releases first, up to `--count`, then
 retry eligible failures without consuming those slots. Five genuine failures
 park a release for review; deferred preorders do not exhaust that failure budget.
@@ -193,9 +195,11 @@ so it includes the approved genre list:
 If the library is already built, use `--resources --genres-only` for the genre
 update instead of a full resource run.
 
-Start with a small batch you have backed up. This updates the music files in
-place. File modification dates stay the same, existing artwork stays, and no
-new artwork is added. Extra named tags are kept. Supported files are FLAC, MP3,
+Start with a small batch you have backed up. Tags are written directly, without
+copying or decoding whole audio files. File modification dates stay the same,
+existing artwork stays, and no new artwork is added. A requested stop lets the
+current metadata update finish first. Direct writes do not keep a rollback copy.
+Extra named tags are kept. Supported files are FLAC, MP3,
 WAV, AIFF, M4A, and Ogg Vorbis; other formats and symbolic links are left alone.
 
 Country and catalog details in album tags or templated folders, such as
@@ -208,6 +212,21 @@ genres. It does not invent a pressing's catalog, country, date, or release ID.
 Without either match, bcfunl tidies what it can safely identify. Unknown genres
 are removed: every retained genre must
 appear in the cleaned Discogs genre list. This mode makes no online requests.
+
+By default, the walk includes releases with media files modified after the date
+two calendar months ago. Dates use UTC and the cutoff day is excluded. Set your
+own cutoff with `--fromdt`:
+
+```sh
+./bcfunl --collection --serverdir /path/to/music --output ./downloads \
+  --fromdt 2026-10-01 --parallel 3 --summary
+```
+
+One newer media file qualifies the whole release. Older releases are skipped
+before tag reads and matching, and do not use count slots. Even `--force` obeys
+the cutoff. For a full historical walk, use an early date such as
+`--fromdt 1900-01-01`. Files modified since their last successful walk are picked
+up again automatically. The walk preserves their modification dates.
 
 Choose `--parallel` from 3 to 16; the default is 3. Completed folders are recorded
 in `./downloads/collection.sqlite3` and skipped next time. Add `--force` to

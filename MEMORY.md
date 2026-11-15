@@ -7,8 +7,8 @@ this session has no general reminder/scheduling tool.
 
 # Project Memory
 
-Updated: 2026-11-14
-Current release: v0.2.2 (folder metadata and master fallback; Docker/live-dataset acceptance pending). Latest implementation details are in the final handoff entry.
+Updated: 2026-11-15
+Current release: v0.2.4 (lightweight collection writes with hard date window; Docker/live acceptance pending). Latest implementation details are in the final handoff entry.
 
 ## Purpose and preferences
 
@@ -3585,3 +3585,114 @@ native-format, artwork, concurrency and metadata tests remain green.
 check-build.sh attempted, still blocked by Docker daemon access. Real Tears For
 Fears dataset acceptance and container/package gates remain pending. No remote
 jobs, source music, resource imports, deployment, commit or push changed.
+
+## 2026-11-15 handoff: v0.2.3 lightweight direct collection metadata writes
+
+Stue reported slow collection walking at --parallel 15. Current live command is
+--collection --serverdir /mnt/FN042018/F8NAS1/music/ --output /data/bcfstag4
+--library /data2/bcfunl/downloads/resources/library.sqlite3 --parallel 15
+--count 1000 --summary. User confirms /data and /data2 are NVMe, music is on NAS.
+Library workers are read-only SQLite connections, history writes occur on the
+main thread, so ordinary inter-worker SQLite writer contention is unlikely.
+The earlier collection design placed full copies next to the NAS music and ran
+two PCM decode/hash passes plus picture comparison and file/directory syncs.
+This was a costly safety layer, not required for preserving file mtime.
+
+Stue explicitly requested removing this stress work: construct metadata and write
+it directly with the native backend, retaining graceful file-unit shutdown. He
+also confirmed the trigger file worked perfectly. No active job was stopped or
+changed by the agent. SSH diagnostics were unavailable (system config permission
+error, then alias DNS failure with explicit user config); no live NAS/CPU/IO
+benchmark or hardware-fault finding is available.
+
+Collection update now edits the original path with Lofty, checks metadata
+readback and discarded genres, and restores original modification/access times
+on success OR returned write/readback failure. Unchanged tags skip writes.
+Removed application-created temp copies, PCM hashes/decodes, picture comparison
+passes, ownership copying/chown, xattr copying, replacement renames and forced
+per-file/directory fsyncs. Native in-place editing keeps the existing inode,
+ownership, permissions, xattrs and artwork. Read-only/hard-linked rejection,
+file advisory locks and stale-source tag/inode checks remain. Failed folders
+stay retryable and error text now acknowledges that some direct updates may
+already have completed; no rollback copy is promised.
+
+Metadata-only reads disable Lofty property/duration parsing and do not need
+Track.duration; the collection-only internal unused duration is zero and never
+written to tags or used in matching. Shared raw/native tag reads and the tag
+writer's alternate-store lookup also skip unnecessary property parsing.
+Staged --process still obtains/validates durations, copies and verifies audio
+as before. Existing custom-tag/artwork preservation tests cover the backend.
+Pictures/PCM validation helpers remain in tests, not the live collection path.
+The backend may still shift encoded data if tags outgrow available padding.
+
+New shutdown thread-local UnitTask defers cooperative check() cancellation for
+the current metadata write/readback/timestamp-restoration unit. requested() is
+still globally visible; other threads stop new work. After the guard drops,
+normal stop behavior resumes. Stop-file, SIGINT and SIGTERM subprocess tests
+exercise completion markers, restored timestamps, and cancellation visibility
+on another thread. Forced termination/SIGKILL, power loss, or storage failures
+cannot be made safe by this guard and may interrupt a direct edit. This is the
+explicitly authorized direct-tagging tradeoff. Existing stop-file path remains
+<output>/.bcfunl-stop; remember to remove it before resuming queued jobs.
+
+README/reference updated. Local version v0.2.3, built 2026-11-15T06:52:20Z.
+183 tests passed, 0 failed, 5 ignored. Strict locked Clippy, formatting, locked
+release build, actual CLI smoke, build-workflow regression and Compose config
+passed. Tests verify PCM/artwork/mtime preservation in the test suite, unchanged
+inodes, xattrs, failed-edit timestamp restoration, skipped unchanged tags, and
+that a file with damaged audio frames can still get a metadata-only update.
+The latter proves the live update no longer requires audio decoding. The
+existing shutdown matrix now includes collection units for file/SIGINT/SIGTERM.
+check-build.sh remains blocked by Docker daemon access, so image/package and
+live media2026 performance acceptance remain pending. No deployment/commit/push.
+
+Known remaining scheduling behavior: collection still dispatches batches of N
+folders and waits for each batch's slowest folder. This can leave workers idle
+and delay progress/history output. It was identified but not changed in this
+writer-focused update. Full directory enumeration precedes filtered work too.
+--timings still applies only to staged --process. Measure the new lighter walk
+before deciding whether scheduling or NAS metadata latency needs further work.
+
+Final direct-write check: media files are opened read/write with O_NOFOLLOW before
+exclusive locking, matching direct edits and NFS lock requirements. Latest locked
+build/tests and CLI smoke passed after this adjustment. Native staging process
+verification is unchanged; no live NAS speed measurement has been performed.
+
+## 2026-11-15 handoff: v0.2.4 hard collection modification-date cutoff
+
+Stue requested a hard modified-after date window, defaulting to today minus two
+months. Implemented --fromdt for --collection only with file modification-date
+semantics. Other modes retain their existing inclusive purchase-date filters
+and no automatic default. Collection --todt remains unsupported.
+
+The collection cutoff is computed once per run: explicit --fromdt or UTC today
+minus two calendar months (end-of-month clamping, including leap years). Strict
+UTC DATE comparison: the cutoff day itself is excluded; e.g. November 15 gives
+September 15 and media modified September 16 onward qualifies. The CLI prints
+the active cutoff. Qualification uses the newest supported media-file mtime in
+each folder, not directory/artwork/sidecar timestamps or tag DATE/YEAR values.
+Any qualifying media file admits the whole folder/release to keep tags consistent.
+Date filtering occurs during enumeration before tag reads or per-release library
+lookups and before --count admission. --force never bypasses the date window.
+Use --fromdt 1900-01-01 for historical work. Summary includes outside-date-window
+folders. Directory traversal/file timestamp reads are still necessary on NAS.
+
+History skip now compares MAX(collection.walk_date) with the newest media mtime,
+so a qualifying folder modified after its last completed walk is retried without
+--force. Unchanged completed folders still skip. Direct metadata edits continue
+to preserve mtime and do not make old files look new. New files copied with old
+preserved mtimes may still need --force within an explicitly broad enough window.
+No history schema or dependency changes were needed. A mechanical version edit
+briefly touched an unrelated zerotrie lock entry; locked checks caught it and
+it was restored exactly. Final Cargo.lock diff changes only bcfunl's own version.
+
+README/reference/help updated with date semantics, strict boundary, default,
+whole-release admission, history behavior and full-history override. Local
+v0.2.4 built 2026-11-15T07:00:50Z. 185 tests passed, 0 failed, 5 ignored. New tests
+cover calendar-month defaults/leap/end-of-month arithmetic, explicit cutoff,
+UTC boundary, exclusion before count, --force obeying the cutoff, no tag reads
+on an excluded invalid-container file, and modified-since-walk admission.
+Strict locked Clippy, formatting, locked optimized build, actual CLI smoke,
+workflow regression and Compose config passed. check-build.sh still blocked at
+Docker daemon access. Live NAS performance/window acceptance and image/package
+gates remain pending. No running jobs or live files were changed/deployed.

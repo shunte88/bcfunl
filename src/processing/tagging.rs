@@ -19,7 +19,7 @@ enum Native {
 }
 fn native(path: &Path) -> Result<Native> {
     let mut file = File::open(path)?;
-    let options = ParseOptions::new();
+    let options = ParseOptions::new().read_properties(false);
     Ok(match super::extension(path).as_str() {
         "flac" => {
             let file = lofty::flac::FlacFile::read_from(&mut file, options)?;
@@ -132,6 +132,18 @@ pub(super) fn raw_tags(path: &Path) -> Result<Tags> {
         _ => (),
     }
     Ok(tags)
+}
+pub(super) fn read_metadata(path: &Path) -> Result<Tags> {
+    crate::shutdown::check()?;
+    let file = lofty::probe::Probe::open(path)?
+        .options(ParseOptions::new().read_properties(false))
+        .read()?;
+    let mut tags = Tags::new();
+    for tag in file.tags() {
+        tags.extend(generic(tag));
+    }
+    tags.extend(read_tags(path)?);
+    Ok(normalize_tags(tags))
 }
 pub fn read(path: &Path) -> Result<(Tags, f64)> {
     crate::shutdown::check()?;
@@ -297,7 +309,9 @@ pub fn write(path: &Path, tags: &Tags) -> Result<()> {
         }
     }
     // Keep alternate stores (RIFF INFO, AIFF text, ID3v1/APE) consistent too.
-    let file = lofty::read_from_path(path)?;
+    let file = lofty::probe::Probe::open(path)?
+        .options(ParseOptions::new().read_properties(false))
+        .read()?;
     crate::limits::checkpoint()?;
     for mut tag in file
         .tags()
@@ -338,6 +352,7 @@ pub fn picture(path: &Path) -> Result<Option<Vec<u8>>> {
         .map(|p| p.data().to_vec()))
 }
 
+#[cfg(test)]
 pub(super) fn pictures(path: &Path) -> Result<Vec<lofty::picture::Picture>> {
     Ok(lofty::read_from_path(path)?
         .tags()

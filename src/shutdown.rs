@@ -9,6 +9,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+thread_local! { static UNIT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+#[cfg(unix)]
+pub(crate) struct UnitTask {
+    _private: (),
+}
+#[cfg(unix)]
+impl Drop for UnitTask {
+    fn drop(&mut self) {
+        UNIT_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+/// Defer cooperative cancellation on this thread until the current write finishes.
+#[cfg(unix)]
+pub(crate) fn unit_task() -> UnitTask {
+    UNIT_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    UnitTask { _private: () }
+}
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 static STOP_FILE: OnceLock<PathBuf> = OnceLock::new();
@@ -101,6 +118,9 @@ pub fn exit_code() -> i32 {
     }
 }
 pub fn check() -> Result<()> {
+    if UNIT_DEPTH.with(|depth| depth.get() > 0) {
+        return Ok(());
+    }
     ensure!(!requested(), "{}", reason());
     Ok(())
 }
@@ -177,6 +197,7 @@ mod tests {
         let result = match std::env::var("BCFUNL_SHUTDOWN_MODE").unwrap().as_str() {
             "aria2" => crate::aria2::cancellation_fixture(&root),
             "processing" => crate::processing::cancellation_fixture(&root),
+            "collection" => crate::processing::collection::cancellation_fixture(&root),
             "save" => crate::download::save(
                 InterruptedReader {
                     root: &root,
@@ -242,7 +263,15 @@ mod tests {
     #[test]
     fn termination_signals_cleanup() {
         for signal in [0, libc::SIGINT, libc::SIGTERM] {
-            for mode in ["pause", "save", "aria2", "async", "parallel", "processing"] {
+            for mode in [
+                "pause",
+                "save",
+                "aria2",
+                "async",
+                "parallel",
+                "processing",
+                "collection",
+            ] {
                 let root = crate::tests::tempdir();
                 let mut child = Command::new(std::env::current_exe().unwrap())
                     .args([
@@ -291,6 +320,12 @@ mod tests {
                     Some(if signal == 0 { 0 } else { 128 + signal }),
                     "{mode}"
                 );
+                if mode == "collection" {
+                    assert!(
+                        root.join("unit-finished").is_file(),
+                        "Metadata write did not finish before stop"
+                    );
+                }
                 if signal == 0 {
                     assert!(
                         root.join("stop").exists(),

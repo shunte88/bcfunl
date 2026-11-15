@@ -68,7 +68,7 @@ struct Args {
     /// Case-insensitive artist substring, in collection search or offline processing
     #[arg(long)]
     artist: Option<String>,
-    /// Inclusive UTC purchase date, YYYY-MM-DD
+    /// UTC date, YYYY-MM-DD: inclusive purchase start, or collection modified-after cutoff (default: two months ago)
     #[arg(long)]
     fromdt: Option<NaiveDate>,
     /// Inclusive UTC purchase date, YYYY-MM-DD
@@ -97,7 +97,7 @@ struct Args {
     #[arg(long)]
     process: bool,
     /// Clean existing music tags in place using the offline Discogs library
-    #[arg(long, conflicts_with_all = ["process", "clean", "resources", "database", "fromdt", "todt", "template", "nice", "offline", "varioustag"])]
+    #[arg(long, conflicts_with_all = ["process", "clean", "resources", "database", "todt", "template", "nice", "offline", "varioustag"])]
     collection: bool,
     /// Stop cleanly when this file exists (default: <output>/.bcfunl-stop)
     #[arg(long)]

@@ -1,5 +1,7 @@
 //! In-place collection tag maintenance using read-only Discogs snapshots.
-use super::{Release, Tags, Track, audio, common, credits, discogs, tagging, tempfile, value};
+#[cfg(test)]
+use super::tempfile;
+use super::{Release, Tags, Track, audio, common, credits, discogs, tagging, value};
 use crate::{Args, db::Database, shutdown};
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
@@ -283,53 +285,24 @@ fn clean(
     clean_genres(tags, allowed, &names);
 }
 
-#[cfg(target_os = "linux")]
-fn copy_attributes(source: &File, target: &File) -> Result<()> {
-    use std::os::fd::AsRawFd;
-    let count = unsafe { libc::flistxattr(source.as_raw_fd(), std::ptr::null_mut(), 0) };
-    if count < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ENOTSUP) {
-            return Ok(());
-        }
-        return Err(error.into());
+fn preserve_times(
+    file: &File,
+    before: &fs::Metadata,
+    edit: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let times = FileTimes::new()
+        .set_accessed(before.accessed()?)
+        .set_modified(before.modified()?);
+    let _unit = shutdown::unit_task();
+    let result = edit();
+    let restored = file
+        .set_times(times)
+        .context("Restore original media timestamps");
+    match (result, restored) {
+        (Err(edit), Err(restore)) => anyhow::bail!("{edit:#}; {restore:#}"),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        _ => Ok(()),
     }
-    let mut names = vec![0u8; count as usize];
-    let size =
-        unsafe { libc::flistxattr(source.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
-    ensure!(size >= 0, "Cannot read source file attributes");
-    for name in names[..size as usize]
-        .split(|b| *b == 0)
-        .filter(|s| !s.is_empty())
-    {
-        let name = std::ffi::CString::new(name)?;
-        let count =
-            unsafe { libc::fgetxattr(source.as_raw_fd(), name.as_ptr(), std::ptr::null_mut(), 0) };
-        ensure!(count >= 0, "Cannot size source file attribute");
-        let mut data = vec![0u8; count as usize];
-        let size = unsafe {
-            libc::fgetxattr(
-                source.as_raw_fd(),
-                name.as_ptr(),
-                data.as_mut_ptr().cast(),
-                data.len(),
-            )
-        };
-        ensure!(size >= 0, "Cannot read source file attribute");
-        ensure!(
-            unsafe {
-                libc::fsetxattr(
-                    target.as_raw_fd(),
-                    name.as_ptr(),
-                    data.as_ptr().cast(),
-                    size as usize,
-                    0,
-                )
-            } == 0,
-            "Cannot preserve source file attribute"
-        );
-    }
-    Ok(())
 }
 
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -341,11 +314,15 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         && a.ctime_nsec() == b.ctime_nsec()
 }
 fn update(path: &Path, original: &Tags, desired: &Tags) -> Result<bool> {
+    shutdown::check()?;
     if original == desired && tagging::raw_tags(path)? == *desired {
         return Ok(false);
     }
-    shutdown::check()?;
-    let source = File::open(path)?;
+    let source = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
     source
         .try_lock()
         .context("Another writer holds the media file lock")?;
@@ -357,60 +334,29 @@ fn update(path: &Path, original: &Tags, desired: &Tags) -> Result<bool> {
         "Read-only, nonregular, or hard-linked media requires review"
     );
     ensure!(
-        tagging::read(path)?.0 == *original,
+        tagging::read_metadata(path)? == *original,
         "Media tags changed before collection update; original retained"
     );
-    let work = tempfile::tempdir_in(path.parent().context("Missing media parent")?)?;
-    let copy = work
-        .path()
-        .join(path.file_name().context("Missing media filename")?);
-    fs::copy(path, &copy)?;
-    let hash = super::pcm_hash(path)?;
-    let pictures = tagging::pictures(path)?;
-    tagging::write(&copy, desired)?;
-    ensure!(
-        hash == super::pcm_hash(&copy)?,
-        "Audio changed while tagging"
-    );
-    ensure!(
-        pictures == tagging::pictures(&copy)?,
-        "Artwork changed while tagging"
-    );
-    let actual = tagging::read(&copy)?.0;
-    for (key, values) in desired {
-        ensure!(
-            actual.get(key) == Some(values),
-            "Tag verification failed: {key}"
-        );
-    }
-    ensure!(
-        actual.get("GENRE") == desired.get("GENRE"),
-        "Discarded genres remain"
-    );
-    let target = OpenOptions::new().write(true).open(&copy)?;
-    use std::os::fd::AsRawFd;
-    if target.metadata()?.uid() != before.uid() || target.metadata()?.gid() != before.gid() {
-        ensure!(
-            unsafe { libc::fchown(target.as_raw_fd(), before.uid(), before.gid()) } == 0,
-            "Cannot preserve media ownership"
-        );
-    }
-    #[cfg(target_os = "linux")]
-    copy_attributes(source, &target)?;
-    target.set_permissions(before.permissions())?;
-    target.set_times(
-        FileTimes::new()
-            .set_accessed(before.accessed()?)
-            .set_modified(before.modified()?),
-    )?;
-    target.sync_all()?;
-    shutdown::check()?;
     ensure!(
         same_file(&before, &fs::symlink_metadata(path)?),
-        "Media changed during collection walk; original retained"
+        "Media changed before collection update"
     );
-    fs::rename(&copy, path)?;
-    File::open(path.parent().unwrap())?.sync_all()?;
+    shutdown::check()?;
+    preserve_times(source, &before, || {
+        tagging::write(path, desired)?;
+        let actual = tagging::read_metadata(path)?;
+        for (key, values) in desired {
+            ensure!(
+                actual.get(key) == Some(values),
+                "Tag readback failed after direct update: {key}"
+            );
+        }
+        ensure!(
+            actual.get("GENRE") == desired.get("GENRE"),
+            "Discarded genres remain after direct update"
+        );
+        Ok(())
+    })?;
     Ok(true)
 }
 
@@ -513,7 +459,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
     let mut originals = BTreeMap::new();
     for path in paths {
         shutdown::check()?;
-        let (mut tags, duration) = tagging::read(path)?;
+        let mut tags = tagging::read_metadata(path)?;
         originals.insert(path.clone(), tags.clone());
         folder_hints(&mut tags, path);
         groups
@@ -522,7 +468,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
             .push(Track {
                 path: path.clone(),
                 tags,
-                duration,
+                duration: 0.0, // Not inspected or used for collection metadata work.
             });
     }
     let mut changed = 0;
@@ -582,6 +528,34 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
     })
 }
 
+fn cutoff(args: &Args, today: chrono::NaiveDate) -> Result<chrono::NaiveDate> {
+    args.fromdt.map(Ok).unwrap_or_else(|| {
+        today
+            .checked_sub_months(chrono::Months::new(2))
+            .context("Cannot calculate collection date window")
+    })
+}
+fn modified_after(latest: chrono::DateTime<chrono::Utc>, from: chrono::NaiveDate) -> bool {
+    latest.date_naive() > from
+}
+fn already_walked(
+    history: &Database,
+    folder: &Path,
+    latest: chrono::DateTime<chrono::Utc>,
+) -> Result<bool> {
+    let rows = history.query(
+        "SELECT MAX(walk_date) FROM collection WHERE path=?",
+        &[folder.to_str().context("Collection path is not UTF-8")?],
+    )?;
+    match rows.first().and_then(|row| row[0].as_deref()) {
+        Some(date) => Ok(chrono::DateTime::parse_from_rfc3339(date)
+            .context("Invalid collection walk_date")?
+            .with_timezone(&chrono::Utc)
+            >= latest),
+        None => Ok(false),
+    }
+}
+
 pub(crate) fn run(args: &Args) -> Result<()> {
     let root = args
         .serverdir
@@ -616,11 +590,17 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     let _history_lock = crate::staging::shared(&history_root)?;
     let history_path = args.output.join("collection.sqlite3");
     let history = Database::open(history_path.to_str().context("History path is not UTF-8")?)?;
+    let from = cutoff(args, chrono::Utc::now().date_naive())?;
+    eprintln!(
+        "Collection window: media modified after {from} (UTC); --force does not bypass this cutoff"
+    );
+    let mut outside = 0;
     let mut pending = vec![root];
     let mut folders = Vec::new();
     while let Some(folder) = pending.pop() {
         shutdown::check()?;
         let mut files = Vec::new();
+        let mut latest = None;
         for entry in fs::read_dir(&folder)? {
             let entry = entry?;
             let kind = entry.file_type()?;
@@ -632,12 +612,22 @@ pub(crate) fn run(args: &Args) -> Result<()> {
                     pending.push(entry.path());
                 }
             } else if kind.is_file() && audio(&entry.path()) {
+                let modified = chrono::DateTime::<chrono::Utc>::from(entry.metadata()?.modified()?);
+                latest = Some(
+                    latest.map_or(modified, |previous: chrono::DateTime<chrono::Utc>| {
+                        previous.max(modified)
+                    }),
+                );
                 files.push(entry.path());
             }
         }
         files.sort();
-        if !files.is_empty() {
-            folders.push((folder, files));
+        if let Some(latest) = latest {
+            if modified_after(latest, from) {
+                folders.push((folder, files, latest));
+            } else {
+                outside += 1;
+            }
         }
     }
     folders.sort_by(|a, b| a.0.cmp(&b.0));
@@ -653,16 +643,11 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     for chunk in folders.chunks(usize::from(args.parallel.unwrap_or(3))) {
         shutdown::check()?;
         let mut jobs = Vec::new();
-        for (folder, files) in chunk {
+        for (folder, files, latest) in chunk {
             if args.count.is_some_and(|n| attempted >= n) {
                 break;
             }
-            let key = folder.to_str().context("Collection path is not UTF-8")?;
-            if !args.force
-                && !history
-                    .query("SELECT 1 FROM collection WHERE path=?", &[key])?
-                    .is_empty()
-            {
+            if !args.force && already_walked(&history, folder, *latest)? {
                 skipped += 1;
                 continue;
             }
@@ -711,13 +696,43 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         }
     }
     println!(
-        "Collection: {attempted} folders attempted, {changed} files updated, {matches} matched, {skipped} skipped, {failures} failed"
+        "Collection: {attempted} folders attempted, {changed} files updated, {matches} matched, {skipped} skipped, {outside} outside date window, {failures} failed"
     );
     ensure!(
         failures == 0,
-        "{failures} collection folders failed; original files retained for failed file updates"
+        "{failures} collection folders failed; direct updates may have completed on individual files; failed folders remain retryable"
     );
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn cancellation_fixture(root: &Path) -> Result<()> {
+    let path = root.join("metadata-unit");
+    fs::write(&path, b"before")?;
+    let file = File::open(&path)?;
+    let before = file.metadata()?;
+    preserve_times(&file, &before, || {
+        fs::write(&path, b"updated")?;
+        fs::write(root.join("ready"), b"ready")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !shutdown::requested() {
+            ensure!(std::time::Instant::now() < deadline, "Stop did not arrive");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        shutdown::check()?;
+        assert!(
+            std::thread::spawn(|| shutdown::check().is_err())
+                .join()
+                .unwrap()
+        );
+        fs::write(root.join("unit-finished"), b"finished")?;
+        Ok(())
+    })?;
+    ensure!(
+        file.metadata()?.modified()? == before.modified()?,
+        "Timestamp not restored after stop"
+    );
+    shutdown::check()
 }
 
 #[cfg(test)]
@@ -782,6 +797,7 @@ mod tests {
             File::open(&path).unwrap().set_modified(stamp).unwrap();
             let before = tagging::read(&path).unwrap().0;
             let hash = super::super::pcm_hash(&path).unwrap();
+            let inode = fs::metadata(&path).unwrap().ino();
             let mut desired = before.clone();
             desired.insert("ARTISTSORT".into(), vec!["Bowie, David".into()]);
             clean(&mut desired, "The XX", None, &allowed);
@@ -793,6 +809,11 @@ mod tests {
                 "{ext}"
             );
             assert_eq!(super::super::pcm_hash(&path).unwrap(), hash, "{ext}");
+            assert_eq!(
+                fs::metadata(&path).unwrap().ino(),
+                inode,
+                "{ext}: file was replaced"
+            );
             let tags = tagging::read(&path).unwrap().0;
             assert_eq!(tags["CUSTOM_VENDOR"], ["Keep This Value"], "{ext}");
             assert_eq!(tags["GENRE"], ["EBM", "Electronic"], "{ext}");
@@ -968,7 +989,7 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
-    fn replacement_preserves_extended_attributes_and_removes_all_unlisted_genres() {
+    fn direct_update_preserves_extended_attributes_and_removes_all_unlisted_genres() {
         use std::os::fd::AsRawFd;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("attributes.flac");
@@ -1169,6 +1190,156 @@ mod tests {
         );
         assert_eq!(tags["COUNTRY_ISO"], ["US"]);
         assert_eq!(tags["CATALOGNUMBER"], ["KNOWN01"]);
+    }
+    #[test]
+    fn failed_metadata_edit_restores_original_timestamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timestamps");
+        fs::write(&path, b"original").unwrap();
+        let file = File::open(&path).unwrap();
+        let before = file.metadata().unwrap();
+        let result = preserve_times(&file, &before, || {
+            file.set_modified(std::time::UNIX_EPOCH)?;
+            anyhow::bail!("Injected tag failure")
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Injected tag failure")
+        );
+        assert_eq!(
+            file.metadata().unwrap().modified().unwrap(),
+            before.modified().unwrap()
+        );
+    }
+    #[test]
+    fn metadata_walk_does_not_decode_the_audio_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("damaged-audio.flac");
+        media(&path, "Romy", "Proof");
+        let mut bytes = fs::read(&path).unwrap();
+        let mut offset = 4;
+        loop {
+            let last = bytes[offset] & 128 != 0;
+            let length = (usize::from(bytes[offset + 1]) << 16)
+                | (usize::from(bytes[offset + 2]) << 8)
+                | usize::from(bytes[offset + 3]);
+            offset += 4 + length;
+            if last {
+                break;
+            }
+        }
+        bytes[offset..offset + 4].fill(0);
+        fs::write(&path, bytes).unwrap();
+        assert!(super::super::pcm_hash(&path).is_err());
+        let original = tagging::read(&path).unwrap().0;
+        let mut desired = original.clone();
+        desired.insert("GENRE".into(), vec!["Ambient".into()]);
+        assert!(update(&path, &original, &desired).unwrap());
+        assert_eq!(tagging::read(&path).unwrap().0["GENRE"], ["Ambient"]);
+        assert!(!fs::read_dir(dir.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".bcfunl-process-")
+        }));
+    }
+    #[test]
+    fn date_window_defaults_to_calendar_months_and_has_a_strict_utc_boundary() {
+        let args =
+            Args::try_parse_from(["bcfunl", "--collection", "--serverdir", "music"]).unwrap();
+        for (today, expected) in [
+            ("2026-11-15", "2026-09-15"),
+            ("2024-04-30", "2024-02-29"),
+            ("2026-01-31", "2025-11-30"),
+        ] {
+            let day = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap();
+            assert_eq!(cutoff(&args, day).unwrap().to_string(), expected);
+        }
+        let from = chrono::NaiveDate::from_ymd_opt(2026, 9, 15).unwrap();
+        for (stamp, expected) in [
+            ("2026-09-14T23:59:59Z", false),
+            ("2026-09-15T23:59:59Z", false),
+            ("2026-09-16T00:00:00Z", true),
+        ] {
+            assert_eq!(
+                modified_after(
+                    chrono::DateTime::parse_from_rfc3339(stamp)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                    from
+                ),
+                expected
+            );
+        }
+        let explicit = Args::try_parse_from([
+            "bcfunl",
+            "--collection",
+            "--serverdir",
+            "music",
+            "--fromdt",
+            "2000-01-01",
+        ])
+        .unwrap();
+        explicit.validate().unwrap();
+        assert_eq!(cutoff(&explicit, from).unwrap().to_string(), "2000-01-01");
+    }
+    #[test]
+    fn date_window_is_applied_before_count_and_force_cannot_override_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        let history = dir.path().join("history");
+        let old = music.join("A Old");
+        let recent = music.join("Z Recent");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir(&recent).unwrap();
+        let old_path = old.join("invalid.flac");
+        fs::write(&old_path, b"not an audio container").unwrap();
+        File::open(&old_path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))
+            .unwrap();
+        let recent_path = recent.join("one.flac");
+        media(&recent_path, "Romy", "Proof");
+        let library_path = dir.path().join("library.sqlite3");
+        library(&library_path);
+        let mut args = Args::try_parse_from([
+            "bcfunl",
+            "--collection",
+            "--force",
+            "--serverdir",
+            music.to_str().unwrap(),
+            "--output",
+            history.to_str().unwrap(),
+            "--library",
+            library_path.to_str().unwrap(),
+            "--fromdt",
+            "2000-01-01",
+            "--count",
+            "1",
+        ])
+        .unwrap();
+        run(&args).unwrap();
+        let db = Database::connect(history.join("collection.sqlite3").to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.query("SELECT path FROM collection", &[]).unwrap(),
+            vec![vec![Some(recent.to_str().unwrap().into())]]
+        );
+        assert_eq!(fs::read(&old_path).unwrap(), b"not an audio container");
+        let latest = chrono::DateTime::<chrono::Utc>::from(
+            fs::metadata(&recent_path).unwrap().modified().unwrap(),
+        );
+        assert!(already_walked(&db, &recent, latest).unwrap());
+        db.query(
+            "UPDATE collection SET walk_date='2001-01-01T00:00:00Z'",
+            &[],
+        )
+        .unwrap();
+        assert!(!already_walked(&db, &recent, latest).unwrap());
+        args.force = false;
+        run(&args).unwrap();
+        assert!(already_walked(&db, &recent, latest).unwrap());
     }
     #[test]
     fn refuses_invalid_audio_or_hardlinks_without_touching_source() {
