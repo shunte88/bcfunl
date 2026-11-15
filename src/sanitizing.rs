@@ -278,19 +278,152 @@ pub fn artist_matches(filter: Option<&str>, artist: &str) -> bool {
     })
 }
 fn catalog_token(token: &str) -> bool {
+    let token = token.trim();
     let lower = token.to_ascii_lowercase();
-    token.len() <= 32
-        && token.chars().any(|c| c.is_ascii_alphabetic())
-        && token.chars().any(|c| c.is_ascii_digit())
+    let words = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if crate::discogs_identity::edition_note(token)
+        || words.iter().any(|word| {
+            [
+                "rm",
+                "re",
+                "remaster",
+                "remastered",
+                "reissue",
+                "reissued",
+                "sde",
+                "deluxe",
+                "edition",
+                "disc",
+                "disk",
+                "vol",
+                "volume",
+                "cd",
+                "lp",
+                "ep",
+                "part",
+                "chapter",
+                "remix",
+                "remixes",
+                "live",
+                "sessions",
+                "bonus",
+                "bit",
+                "khz",
+                "bpm",
+            ]
+            .contains(word)
+        })
+        || ["bit", "khz", "bpm", "flac", "mp3", "dvd", "sacd"]
+            .iter()
+            .any(|word| lower.contains(word))
+    {
+        return false;
+    }
+    let compact = token
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    let digits = compact.chars().filter(char::is_ascii_digit).count();
+    let year = |s: &str| s.len() == 4 && s.parse::<u16>().is_ok_and(|n| (1900..=2099).contains(&n));
+    if words.iter().all(|word| year(word)) {
+        return false;
+    }
+    let resolution = words.len() == 2
+        && ["16", "24", "32"].contains(&words[0])
+        && ["44", "48", "88", "96", "176", "192"].contains(&words[1]);
+    !resolution
+        && !compact.is_empty()
+        && token.len() <= 64
         && token
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-./".contains(c))
-        && !lower.ends_with("bpm")
-        && ![
-            "cd", "disc", "disk", "vol", "lp", "bpm", "dvd", "sacd", "mp3",
-        ]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
+            .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || "-./_".contains(c))
+        && digits > 0
+        && (compact.chars().any(|c| c.is_ascii_alphabetic()) || digits >= 5)
+        && !["cd", "disc", "disk", "vol", "lp", "part", "chapter"]
+            .iter()
+            .any(|p| lower.starts_with(p))
+}
+
+pub(crate) struct ReleaseHints {
+    pub title: String,
+    pub country: Option<String>,
+    pub catalog: Option<String>,
+}
+pub(crate) fn release_hints(raw: &str, artist: &str) -> ReleaseHints {
+    let mut parts = Vec::new();
+    let mut rest = raw;
+    let mut countries = Vec::new();
+    let mut catalogs = Vec::new();
+    while let Some(start) = rest.find('[') {
+        let Some(end) = rest[start + 1..].find(']').map(|n| n + start + 1) else {
+            break;
+        };
+        parts.push((false, rest[..start].to_owned(), None, None));
+        let token = rest[start + 1..end].trim();
+        let country = if token.len() == 2
+            && token.bytes().all(|b| b.is_ascii_alphabetic())
+            && !["cd", "re"].iter().any(|s| token.eq_ignore_ascii_case(s))
+        {
+            if token.eq_ignore_ascii_case("EU") {
+                Some("EU".to_owned())
+            } else {
+                crate::metadata::country(token).map(str::to_owned)
+            }
+        } else {
+            None
+        };
+        let (_, catalog) = if country.is_none() {
+            title(&format!("Album [{token}]"), artist)
+        } else {
+            (String::new(), None)
+        };
+        if let Some(value) = &country
+            && !countries.contains(value)
+        {
+            countries.push(value.clone());
+        }
+        if let Some(value) = &catalog
+            && !catalogs.contains(value)
+        {
+            catalogs.push(value.clone());
+        }
+        parts.push((true, rest[start..=end].to_owned(), country, catalog));
+        rest = &rest[end + 1..];
+    }
+    parts.push((false, rest.to_owned(), None, None));
+    let country = if countries.len() == 1 {
+        countries.pop()
+    } else {
+        None
+    };
+    let catalog = if catalogs.len() == 1 {
+        catalogs.pop()
+    } else {
+        None
+    };
+    let stripped = parts
+        .into_iter()
+        .filter(|(bracket, _, c, k)| {
+            !*bracket
+                || !(c.as_ref().is_some_and(|v| Some(v) == country.as_ref())
+                    || k.as_ref().is_some_and(|v| Some(v) == catalog.as_ref()))
+        })
+        .map(|(_, text, _, _)| text)
+        .collect::<String>();
+    let text = if stripped.trim().is_empty() {
+        raw
+    } else {
+        &stripped
+    };
+    let (title, other) = title(text, artist);
+    ReleaseHints {
+        title,
+        country,
+        catalog: catalog.or(other),
+    }
 }
 
 fn colon_catalog(token: &str) -> bool {
@@ -468,6 +601,77 @@ pub fn title(raw: &str, artist: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn templated_album_hints_reuse_title_catalog_and_edition_rules() {
+        for (raw, base, country, cat) in [
+            (
+                "Woman In Chains [Eu] [876 249-2]",
+                "Woman In Chains",
+                Some("EU"),
+                Some("876 249-2"),
+            ),
+            (
+                "The Seeds Of Love [UK] [558 105-2]",
+                "The Seeds Of Love",
+                Some("GB"),
+                Some("558 105-2"),
+            ),
+            (
+                "The Hurting [Super Deluxe Edition]",
+                "The Hurting [Super Deluxe Edition]",
+                None,
+                None,
+            ),
+            (
+                "Songs From The Big Chair [SDE RM RE 2014]",
+                "Songs From The Big Chair [SDE RM RE 2014]",
+                None,
+                None,
+            ),
+            ("The Hurting [RM 1999]", "The Hurting [RM 1999]", None, None),
+            ("Title [CD] [24-96]", "Title [CD] [24-96]", None, None),
+        ] {
+            let hints = release_hints(raw, "Tears For Fears");
+            assert!(
+                hints.title.eq_ignore_ascii_case(base),
+                "{raw}: {}",
+                hints.title
+            );
+            assert_eq!(hints.country.as_deref(), country, "{raw}");
+            assert_eq!(hints.catalog.as_deref(), cat, "{raw}");
+        }
+        assert_eq!(
+            crate::discogs_identity::search_title("Songs From The Big Chair [SDE RM RE 2014]"),
+            "Songs From The Big Chair"
+        );
+        assert_eq!(
+            crate::discogs_identity::master_title(
+                "The Hurting [Super Deluxe Edition] [Live Sessions]"
+            ),
+            "The Hurting"
+        );
+        assert_eq!(
+            crate::discogs_identity::master_title(
+                "The Hurting [Super Deluxe Edition] [B-Sides And Remixes]"
+            ),
+            "The Hurting"
+        );
+        assert_eq!(
+            crate::discogs_identity::master_title("Title [Live Sessions]"),
+            "Title [Live Sessions]"
+        );
+        for note in ["RM1999", "RE2014", "2014RM/RE", "SDE RM RE 2014"] {
+            let text = format!("Title [{note}]");
+            assert_eq!(crate::discogs_identity::search_title(&text), "Title");
+            assert!(release_hints(&text, "Artist").catalog.is_none());
+        }
+        assert_eq!(
+            crate::discogs_identity::master_title(
+                "The Hurting (Super Deluxe Edition) [Live Sessions]"
+            ),
+            "The Hurting"
+        );
+    }
     #[test]
     fn ombra_catalog_titles_remain_meaningful_and_idempotent() {
         for raw in [

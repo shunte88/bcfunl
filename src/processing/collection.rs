@@ -208,10 +208,13 @@ fn clean(
         {
             tags.insert("DATE".into(), vec![year.into()]);
         }
-        if let Some(cat) = &found.catalog {
+        if value(tags, "CATALOGNUMBER").is_empty()
+            && let Some(cat) = &found.catalog
+        {
             tags.insert("CATALOGNUMBER".into(), vec![cat.clone()]);
             tags.insert("CATALOGNO".into(), vec![cat.clone()]);
         }
+
         if let Some(label) = body["labels"]
             .as_array()
             .into_iter()
@@ -250,6 +253,19 @@ fn clean(
         .filter(|s| s.parse::<u16>().is_ok_and(|y| (1000..=2999).contains(&y)))
     {
         tags.insert("YEAR".into(), vec![year.into()]);
+    }
+    let code = discogs::country(&value(tags, "RELEASECOUNTRY"));
+    let code = if code.is_empty() {
+        discogs::country(&value(tags, "COUNTRY_ISO"))
+    } else {
+        code
+    };
+    if !code.is_empty() {
+        tags.insert("COUNTRY_ISO".into(), vec![code.clone()]);
+        tags.insert("RELEASECOUNTRY".into(), vec![code.clone()]);
+        if tags.contains_key("COUNTRY") {
+            tags.insert("COUNTRY".into(), vec![code]);
+        }
     }
     let cat = value(tags, "CATALOGNUMBER");
     if !cat.is_empty() {
@@ -398,6 +414,93 @@ fn update(path: &Path, original: &Tags, desired: &Tags) -> Result<bool> {
     Ok(true)
 }
 
+fn folder_hints(tags: &mut Tags, path: &Path) {
+    let artist = value(tags, "ALBUMARTIST");
+    let artist = if artist.is_empty() {
+        value(tags, "ARTIST")
+    } else {
+        artist
+    };
+    let album = value(tags, "ALBUM");
+    let metadata = crate::sanitizing::release_hints(&album, &artist);
+    let mut folder = path.parent().unwrap_or(Path::new(""));
+    let name = folder
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .replace(' ', "");
+    if ["cd", "disc", "disk"].iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|tail| !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()))
+    }) {
+        folder = folder.parent().unwrap_or(folder);
+    }
+    let directory = crate::sanitizing::release_hints(
+        &folder.file_name().unwrap_or_default().to_string_lossy(),
+        &artist,
+    );
+    let hint_country = directory.country.as_ref().or(metadata.country.as_ref());
+    let current = discogs::country(&value(tags, "RELEASECOUNTRY"));
+    if let Some(country) = hint_country
+        && !current.is_empty()
+        && current != *country
+    {
+        eprintln!(
+            "  Folder country {country} differs from existing {current}; retaining existing tag: {}",
+            path.display()
+        );
+    }
+    let code = if current.is_empty() {
+        hint_country.cloned().unwrap_or_default()
+    } else {
+        current
+    };
+    if !code.is_empty() {
+        tags.insert("RELEASECOUNTRY".into(), vec![code.clone()]);
+        tags.insert("COUNTRY_ISO".into(), vec![code.clone()]);
+        if tags.contains_key("COUNTRY") {
+            tags.insert("COUNTRY".into(), vec![code]);
+        }
+    }
+    let hint_catalog = directory
+        .catalog
+        .as_ref()
+        .or(metadata.catalog.as_ref())
+        .cloned();
+    let current = value(tags, "CATALOGNUMBER");
+    if let Some(catalog) = hint_catalog {
+        if current.is_empty() {
+            tags.insert("CATALOGNUMBER".into(), vec![catalog.clone()]);
+            tags.insert("CATALOGNO".into(), vec![catalog]);
+        } else {
+            let key = |s: &str| {
+                s.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+            };
+            if key(&current) != key(&catalog) {
+                eprintln!(
+                    "  Folder catalog {catalog} differs from existing {current}; retaining existing tag: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    let malformed = album.matches('[').count() != album.matches(']').count();
+    let title = if (malformed || album.is_empty())
+        && (directory.country.is_some() || directory.catalog.is_some() || malformed)
+    {
+        directory.title
+    } else {
+        metadata.title
+    };
+    if !title.is_empty() {
+        tags.insert("ALBUM".into(), vec![title]);
+    }
+}
+
 struct Walked {
     identities: Vec<(String, String)>,
     changed: usize,
@@ -407,9 +510,12 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
     let db = Database::read_only(library.to_str().context("Library path is not UTF-8")?)?;
     let allowed = vocabulary(&db)?;
     let mut groups: BTreeMap<String, Vec<Track>> = BTreeMap::new();
+    let mut originals = BTreeMap::new();
     for path in paths {
         shutdown::check()?;
-        let (tags, duration) = tagging::read(path)?;
+        let (mut tags, duration) = tagging::read(path)?;
+        originals.insert(path.clone(), tags.clone());
+        folder_hints(&mut tags, path);
         groups
             .entry(value(&tags, "ALBUM"))
             .or_default()
@@ -449,7 +555,10 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
         } else {
             discogs::find_collection(&db, &info, &tracks)?
         };
-        let original = tracks.iter().map(|t| t.tags.clone()).collect::<Vec<_>>();
+        let original = tracks
+            .iter()
+            .map(|t| originals.remove(&t.path).expect("original track tags"))
+            .collect::<Vec<_>>();
         if let Some(found) = &found {
             discogs::apply(&info, &mut tracks, found);
             matched += 1;
@@ -702,6 +811,9 @@ mod tests {
         library(&library_path);
         let path = music.join("keep.flac");
         media(&path, "Romy", "Proof");
+        let mut source = tagging::read(&path).unwrap().0;
+        source.insert("CATALOGNO".into(), vec!["CAT01".into()]);
+        tagging::write(&path, &source).unwrap();
         let stamp = fs::metadata(&path).unwrap().modified().unwrap();
         let args = Args::try_parse_from([
             "bcfunl",
@@ -821,7 +933,7 @@ mod tests {
             url: String::new(),
         };
         for (id, cat, country, expected) in [
-            ("", "", "", true),
+            ("", "", "", false),
             ("1", "cat-01", "GB", true),
             ("2", "", "", false),
             ("", "WRONG", "", false),
@@ -934,6 +1046,129 @@ mod tests {
                 .contains("changed before")
         );
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    #[test]
+    fn folder_metadata_is_tagged_without_a_match_and_master_does_not_invent_pressings() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        fs::create_dir(&music).unwrap();
+        let library_path = dir.path().join("library.sqlite3");
+        library(&library_path);
+        let db = Database::connect(library_path.to_str().unwrap()).unwrap();
+        db.query(
+            "CREATE TABLE masters(id INTEGER PRIMARY KEY,title TEXT,genres TEXT,styles TEXT)",
+            &[],
+        )
+        .unwrap();
+        db.query(
+            "CREATE TABLE master_artists(master_id INTEGER,position INTEGER,name TEXT,anv TEXT)",
+            &[],
+        )
+        .unwrap();
+        db.query(
+            r#"INSERT INTO masters VALUES(9,'The Hurting','["Electronic"]','["Ambient"]')"#,
+            &[],
+        )
+        .unwrap();
+        db.query(
+            "INSERT INTO master_artists VALUES(9,0,'Tears For Fears',NULL)",
+            &[],
+        )
+        .unwrap();
+        drop(db);
+        let folder = music.join("The Hurting [Super Deluxe Edition] [Live Sessions]");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("original.flac");
+        media(
+            &path,
+            "Tears For Fears",
+            "The Hurting [Super Deluxe Edition] [Live Sessions]",
+        );
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let walked = release(std::slice::from_ref(&path), &library_path).unwrap();
+        assert_eq!(walked.matched, 1);
+        let tags = tagging::read(&path).unwrap().0;
+        assert_eq!(tags["DISCOGSMASTERID"], ["9"]);
+        assert_eq!(tags["GENRE"], ["Electronic", "Ambient"]);
+        for key in [
+            "DISCOGSID",
+            "CATALOGNUMBER",
+            "CATALOGNO",
+            "RELEASECOUNTRY",
+            "COUNTRY_ISO",
+            "LABEL",
+            "DATE",
+            "YEAR",
+        ] {
+            assert!(!tags.contains_key(key), "{key} was invented");
+        }
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        let again = release(std::slice::from_ref(&path), &library_path).unwrap();
+        assert_eq!(again.matched, 1);
+        assert_eq!(again.changed, 0);
+        let folder = music.join("Woman In Chains [EU] [876 249-2]");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("same.flac");
+        media(&path, "Tears For Fears", "Woman In Chains [Eu] [876 249-2]");
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(
+            release(std::slice::from_ref(&path), &library_path)
+                .unwrap()
+                .matched,
+            0
+        );
+        let tags = tagging::read(&path).unwrap().0;
+        assert_eq!(tags["ALBUM"], ["Woman In Chains"]);
+        assert_eq!(tags["COUNTRY_ISO"], ["EU"]);
+        assert_eq!(tags["RELEASECOUNTRY"], ["EU"]);
+        assert_eq!(tags["CATALOGNUMBER"], ["876 249-2"]);
+        assert_eq!(tags["CATALOGNO"], ["876 249-2"]);
+        assert!(!tags.contains_key("DISCOGSID"));
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        let db = Database::connect(library_path.to_str().unwrap()).unwrap();
+        let body = json!({"title":"Woman In Chains","artists":[{"name":"Tears For Fears"}],"country":"Europe","labels":[{"name":"Fixture Label","catno":"8762492"}],"genres":["Electronic"],"styles":["Ambient"]});
+        db.query(
+            "INSERT INTO releases VALUES(2,'woman in chains',?)",
+            &[&body.to_string()],
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(
+            release(std::slice::from_ref(&path), &library_path)
+                .unwrap()
+                .matched,
+            1
+        );
+        let tags = tagging::read(&path).unwrap().0;
+        assert_eq!(tags["DISCOGSID"], ["2"]);
+        assert_eq!(tags["CATALOGNUMBER"], ["876 249-2"]);
+        assert_eq!(tags["COUNTRY_ISO"], ["EU"]);
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), before);
+    }
+    #[test]
+    fn folder_hints_follow_disc_parent_and_preserve_existing_facts() {
+        let mut tags = Tags::from([
+            (
+                "ALBUM".into(),
+                vec!["The Seeds Of Love [UK] [558 105-2]".into()],
+            ),
+            ("ARTIST".into(), vec!["Tears For Fears".into()]),
+        ]);
+        folder_hints(
+            &mut tags,
+            Path::new("/music/The Seeds Of Love [UK] [558 105-2]/CD1/01.flac"),
+        );
+        assert_eq!(tags["ALBUM"], ["The Seeds Of Love"]);
+        assert_eq!(tags["COUNTRY_ISO"], ["GB"]);
+        assert_eq!(tags["CATALOGNUMBER"], ["558 105-2"]);
+        tags.insert("RELEASECOUNTRY".into(), vec!["US".into()]);
+        tags.insert("CATALOGNUMBER".into(), vec!["KNOWN01".into()]);
+        folder_hints(
+            &mut tags,
+            Path::new("/music/The Seeds Of Love [UK] [558 105-2]/01.flac"),
+        );
+        assert_eq!(tags["COUNTRY_ISO"], ["US"]);
+        assert_eq!(tags["CATALOGNUMBER"], ["KNOWN01"]);
     }
     #[test]
     fn refuses_invalid_audio_or_hardlinks_without_touching_source() {

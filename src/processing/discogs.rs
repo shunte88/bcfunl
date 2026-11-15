@@ -131,7 +131,7 @@ pub(super) struct Match {
     composers: Vec<String>,
     conductors: Vec<String>,
 }
-fn country(value: &str) -> String {
+pub(super) fn country(value: &str) -> String {
     if value.eq_ignore_ascii_case("EU") || value.eq_ignore_ascii_case("Europe") {
         "EU".into()
     } else {
@@ -442,7 +442,7 @@ fn identity(
     } else {
         &album
     };
-    let album = search_title(&crate::sanitizing::title(album, &artist).0);
+    let album = search_title(&crate::sanitizing::release_hints(album, &artist).title);
     let iso = common(tracks, "RELEASECOUNTRY")?;
     let iso = country(if iso.is_empty() {
         &release.country
@@ -474,14 +474,116 @@ pub(super) fn find_collection(
     release: &Release,
     tracks: &[Track],
 ) -> Result<Option<Match>> {
-    find_local_policy(
-        db,
-        release,
-        tracks,
-        json!({"dataset":"discogs-releases","mode":"collection"}),
-        true,
-    )
+    let pressing = tracks.iter().any(|t| {
+        !value(&t.tags, "DISCOGSID").is_empty()
+            || catalog(&value(&t.tags, "CATALOGNUMBER")).is_some()
+            || catalog(&value(&t.tags, "CATALOGNO")).is_some()
+    });
+    if pressing
+        && let Some(found) = find_local_policy(
+            db,
+            release,
+            tracks,
+            json!({"dataset":"discogs-releases","mode":"collection"}),
+            true,
+        )?
+    {
+        return Ok(Some(found));
+    }
+    find_master(db, release, tracks)
 }
+fn find_master(
+    db: &crate::db::Database,
+    release: &Release,
+    tracks: &[Track],
+) -> Result<Option<Match>> {
+    if db
+        .query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='master_artists'",
+            &[],
+        )?
+        .is_empty()
+    {
+        return Ok(None);
+    }
+    let Some((credit, artist, album, iso)) = identity(release, tracks)? else {
+        return Ok(None);
+    };
+    let album = crate::discogs_identity::master_title(&album);
+    let key = crate::discogs_identity::title_key(&album);
+    let linked = db
+        .query("PRAGMA table_info(releases)", &[])?
+        .iter()
+        .any(|row| row[1].as_deref() == Some("master_id"));
+    let rows = if linked {
+        db.query("SELECT id,title,genres,styles FROM masters WHERE title=? COLLATE NOCASE UNION SELECT m.id,m.title,m.genres,m.styles FROM masters m JOIN releases r ON r.master_id=m.id WHERE r.title_key=? ORDER BY id",&[&album,&key])?
+    } else {
+        db.query(
+            "SELECT id,title,genres,styles FROM masters WHERE title=? COLLATE NOCASE ORDER BY id",
+            &[&album],
+        )?
+    };
+    let aliases = artist_aliases(&artist);
+    for row in rows {
+        shutdown::check()?;
+        let id = row[0].as_deref().context("Missing master ID")?;
+        if !tracks
+            .iter()
+            .flat_map(|track| track.tags.get("DISCOGSMASTERID").into_iter().flatten())
+            .filter(|id| !id.trim().is_empty())
+            .all(|known| known.trim() == id)
+        {
+            continue;
+        }
+        let names = db
+            .query(
+                "SELECT name,anv FROM master_artists WHERE master_id=? ORDER BY position",
+                &[id],
+            )?
+            .into_iter()
+            .filter_map(|a| {
+                a[1].clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .or(a[0].clone())
+            })
+            .collect::<Vec<_>>();
+        let title = row[1].as_deref().unwrap_or_default();
+        if !same_credit(&names.join(";"), &credit, &aliases)
+            || !same(&crate::discogs_identity::master_title(title), &album)
+        {
+            continue;
+        }
+        let mut genres = Vec::<String>::new();
+        for text in [&row[2], &row[3]].into_iter().flatten() {
+            genres.extend(serde_json::from_str::<Vec<String>>(text)?);
+        }
+        let detail = vcw_metadata::Release {
+            album: title.into(),
+            album_artist: names.join(";"),
+            genres,
+            ..Default::default()
+        };
+        let mut found = selected(&detail, &artist, &album, &iso);
+        found.ids.clear();
+        found.catalog = None;
+        found.label = None;
+        found.body = json!({"master_id":id,"artists":names.iter().map(|name| json!({"name":name})).collect::<Vec<_>>()});
+        found.evidence["kind"] = json!("master-match");
+        found.evidence["release_ids"] = json!([]);
+        found.evidence["master_ids"] = json!([id]);
+        found.evidence["genre_policy"] = json!("matched-master");
+        found.evidence["source"] = json!({"dataset":"discogs-masters","mode":"collection"});
+        found.evidence["country_policy"] = json!("not-applicable-to-master-group");
+        found.evidence["matched_countries"] = json!([]);
+        found.evidence["selection_policy"] = json!("first-eligible-artist-title-master");
+        eprintln!(
+            "  Discogs master [{artist} - {album}]: selected {id}; no pressing details inferred"
+        );
+        return Ok(Some(found));
+    }
+    Ok(None)
+}
+
 fn find_local_policy(
     db: &crate::db::Database,
     release: &Release,
@@ -494,9 +596,15 @@ fn find_local_policy(
     };
     let aliases = artist_aliases(&artist);
     let key = crate::discogs_identity::title_key(&album);
+    let base = if collection {
+        crate::discogs_identity::master_title(&album)
+    } else {
+        album.clone()
+    };
+    let base_key = crate::discogs_identity::title_key(&base);
     for row in db.query(
-        "SELECT id FROM releases WHERE title_key=? ORDER BY id",
-        &[&key],
+        "SELECT id FROM releases WHERE title_key IN (?,?) ORDER BY id",
+        &[&key, &base_key],
     )? {
         shutdown::check()?;
         crate::limits::checkpoint()?;
@@ -522,7 +630,8 @@ fn find_local_policy(
         let title = body["title"].as_str().unwrap_or_default();
         let country = body["country"].as_str().unwrap_or_default();
         if !same_credit(&detail_credit, &credit, &aliases)
-            || !same(title, &album)
+            || !(same(title, &album)
+                || (collection && same(&crate::discogs_identity::master_title(title), &base)))
             || (!(collection && iso.is_empty()) && !country_matches(country, &iso))
         {
             continue;
@@ -674,7 +783,14 @@ pub(super) fn apply(release: &Release, tracks: &mut [Track], found: &Match) -> R
         {
             track.tags.insert("LABEL".into(), vec![label.clone()]);
         }
-        track.tags.insert("DISCOGSID".into(), found.ids.clone());
+        if !found.ids.is_empty() {
+            track.tags.insert("DISCOGSID".into(), found.ids.clone());
+        }
+        if let Some(id) = found.body["master_id"].as_str()
+            && found.evidence["kind"] == "master-match"
+        {
+            track.tags.insert("DISCOGSMASTERID".into(), vec![id.into()]);
+        }
         track.tags.insert(
             "BCFUNL_GENRE_SOURCE".into(),
             vec![found.evidence.to_string()],

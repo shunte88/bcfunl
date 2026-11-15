@@ -198,9 +198,15 @@ place. File modification dates stay the same, existing artwork stays, and no
 new artwork is added. Extra named tags are kept. Supported files are FLAC, MP3,
 WAV, AIFF, M4A, and Ogg Vorbis; other formats and symbolic links are left alone.
 
-Matching Discogs releases can supply artist credits, composers, conductors,
-genres, dates, labels, and catalog numbers. Without a match, bcfunl tidies what
-it can safely identify. Unknown genres are removed: every retained genre must
+Country and catalog details in album tags or templated folders, such as
+`The Seeds Of Love [UK] [558 105-2]`, fill missing tags and help matching. UK is
+stored as GB; EU is kept as a region. Existing tags take priority.
+
+A known release ID or catalog match can supply detailed release tags. Otherwise,
+an artist/title match to a Discogs master can supply album artist names and
+genres. It does not invent a pressing's catalog, country, date, or release ID.
+Without either match, bcfunl tidies what it can safely identify. Unknown genres
+are removed: every retained genre must
 appear in the cleaned Discogs genre list. This mode makes no online requests.
 
 Choose `--parallel` from 3 to 16; the default is 3. Completed folders are recorded

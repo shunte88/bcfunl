@@ -9,7 +9,7 @@ this session has no general reminder/scheduling tool.
 
 
 Updated: 2026-11-14 (America/New_York)
-Local release: **v0.2.1**, selective resources and fast genre refresh; Docker/full-import/live-walk acceptance pending
+Local release: **v0.2.2**, folder metadata and master fallback; Docker/live-dataset acceptance pending
 
 ## Current outcome
 
@@ -3027,3 +3027,71 @@ original governed publication, collection walk, stop-file checks and cleanup.
 Full check-build.sh remains blocked at Docker daemon access. Live remote download,
 full monthly dataset performance, container image/package and media2026 acceptance
 remain unverified. No live data, jobs, remote deployment, commit or push changed.
+
+## 2026-11-14 handoff: v0.2.2 folder metadata and master fallback
+
+Stue tested Tears For Fears collection files: 19 folders, 219 updated, only 2
+release matches, 10 skipped. Logs showed bracketed country/catalog decorations
+still in ALBUM lookup strings. He requested two-letter bracket country and
+catalog hints, reuse of existing RM/RE title rules, and master fallback. Explicit
+policy: if we do not know a fact, do not invent it.
+
+Added shared sanitizing::release_hints, wrapping existing title/catalog logic
+rather than label-specific rules. Extract country and catalog from ALBUM and
+immediate templated album-folder names; CD1/Disc 1 subfolders use their parent.
+UK normalizes to GB, EU is a supported region. Ambiguous standalone CD/RE notes
+are not inferred as countries. Numeric/spaced catalogs such as 876 249-2 and
+558 105-2 are supported by the shared catalog parser, with year/edition/disc/
+audio-resolution exclusions. Source catalog spellings are retained once known.
+Fills RELEASECOUNTRY, COUNTRY_ISO, CATALOGNUMBER/CATALOGNO even without a Discogs
+match. Existing tags win over folder conflicts and warnings identify them.
+Recognized annotations are removed from ALBUM but paths remain unchanged. A
+malformed bracketed ALBUM can use the complete templated folder title. Original
+tag maps are captured before hint injection so source-change verification stays
+valid. Country/catalog aliases normalize through the shared tagging reader.
+
+Shared Discogs RM/RE handling moved into edition_note, used by the existing
+search_title path and catalog exclusion. Handles attached RM1999/RE2014 and
+SDE RM RE 2014. Edition text remains in source tags. Shared master_title strips
+explicit deluxe/expanded edition notes for lookup; live-session/B-sides/remix
+component notes are stripped only within explicit deluxe/expanded context.
+Standalone live recordings keep their title identity. Acquisition/processing
+Discogs identity now uses the same shared metadata hint/title rules. No new
+force-uppercase data entries or label-specific rules were added.
+
+Collection matching is safer now. The earlier no-identifier fallback could pick
+the first different pressing and write its catalog/ID. Detailed release metadata
+now requires an existing release ID or catalog selector, then validates artist,
+normalized title, known country and all selectors. Indexed SQL uses title_key IN
+(clean key, shared edition-base key), ordered by release ID. Catalog comparison
+ignores case/spacing/punctuation. Country alone does not identify a pressing.
+
+If detailed release lookup is unavailable or no selector exists, lookup masters
+via indexed case-insensitive base title and indexed release title/master links,
+then validate artist aliases/title and any existing DISCOGSMASTERID. A matched
+master supplies album identity and genres plus DISCOGSMASTERID, never a release
+ID, catalog, label, country or pressing date/year. The master main-release pointer
+is not used as ownership evidence. Master evidence is explicitly marked as such.
+All genres still pass the approved library dictionary. Unknown facts stay as-is;
+source track credits and other named tags/artwork/mtime/path guarantees remain.
+
+No resource rebuild is required for this matching update if the existing library
+contains the already supported artists, masters and releases tables. README and
+reference describe extraction, master/release distinction and actual SQL queries.
+Use --force to revisit already walked folders. IMPORTANT: re-copy untouched test
+files for a clean comparison. Earlier tests may already contain speculative
+release IDs/catalogs written by the old first-release fallback, and new code
+intentionally does not automatically erase existing metadata. Those IDs can pin
+the old pressing even under --force. No live test copies were changed by agent.
+
+Local version v0.2.2, built 2026-11-15T03:38:41Z (November 14 local time).
+181 tests passed, 0 failed, 5 ignored; strict locked Clippy, formatting, locked
+release build, workflow regression, Compose config and actual CLI smoke passed.
+Fixtures cover numeric/spaced catalogs, UK/EU parsing, disc parents, explicit
+conflicts, RM/RE variants, edition/component identity, master-only enrichment
+without invented pressing fields, repeat idempotence and a catalog-selected
+Europe release preserving folder catalog spelling and exact mtimes. Existing
+native-format, artwork, concurrency and metadata tests remain green.
+check-build.sh attempted, still blocked by Docker daemon access. Real Tears For
+Fears dataset acceptance and container/package gates remain pending. No remote
+jobs, source music, resource imports, deployment, commit or push changed.

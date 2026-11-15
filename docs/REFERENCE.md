@@ -1263,9 +1263,13 @@ are untouched. Folders used for private bcfunl temporary work are excluded.
 Missing or conflicting album identity prevents enrichment; safe local tag
 cleanup still applies. Existing Discogs IDs, catalogs (ignoring spaces and
 hyphens), and known countries constrain matching. With no known country,
-collection mode accepts a matching artist/title from any country. The first
-eligible local release by ID is selected. Download processing retains its
-existing stricter country policy. Check a small batch before a large walk,
+collection mode accepts a matching artist/title from any country. A release ID or catalog is required before collection mode applies detailed
+release metadata; the first eligible release by ID is selected within those
+constraints. Country alone does not identify a pressing. Without a confirmed
+release candidate, collection mode searches masters by artist/title and uses
+only album-level identity/genres plus `DISCOGSMASTERID`. It does not follow the
+master's main-release pointer or copy its catalog, label, date, country, or
+release ID. Download processing retains its existing stricter country policy. Check a small batch before a large walk,
 especially where pressing identifiers are missing.
 
 Confirmed releases supply album artist and sorting names, label, catalog
@@ -1344,3 +1348,58 @@ hashed. Metadata reuse cannot detect silent disk corruption with unchanged
 metadata. Use normal `--resources --force` to rehash files and reimport all
 datasets. Other platforms continue hashing files. Legacy libraries acquire the
 new source metadata on the next normal resource run.
+
+### Folder hints and collection matching queries
+
+The shared title/catalog parser handles album-tag and folder annotations.
+Recognized square-bracket two-character countries fill missing `RELEASECOUNTRY`
+and `COUNTRY_ISO` tags; UK maps to GB and EU is retained as a region. Ambiguous
+standalone CD/RE markers are left as edition/format notes. Catalog hints can
+include spaces and numeric forms such as `[876 249-2]`; `CATALOGNUMBER` and
+`CATALOGNO` receive the value even when no Discogs record matches. Existing tags
+win over conflicting folder hints, which are logged. CD1/Disc 1 subfolders use
+the album parent. Recognized metadata annotations are removed from ALBUM, not
+from file or folder names. Malformed bracketed album tags can fall back to the
+complete templated folder title.
+
+The shared RM/RE lookup rules handle year-qualified remaster/reissue notes,
+including RM1999 and RE2014. Source edition text remains in the tags. Collection
+master lookup also recognizes explicit deluxe/expanded edition notes. B-sides,
+remix and live-session component notes are removed from the master query only
+when an explicit deluxe/expanded context is present. Standalone live albums
+retain their identity.
+
+Detailed-release candidates use the existing indexed title key:
+
+```sql
+SELECT id FROM releases
+WHERE title_key IN (:clean_title_key, :edition_base_key)
+ORDER BY id;
+```
+
+Rust then validates canonical artist aliases, title, known country, and all
+provided release IDs/catalogs. Catalog comparison ignores case, spaces and
+punctuation. Master candidates use the case-insensitive `masters.title` index,
+plus master links from releases with the same indexed title key; artist/title
+validation still applies. This uses existing resource tables and indexes. No
+resource rebuild is needed just for the new matching behavior.
+
+Repeat a completed walk with `--force`. For a clean comparison, start from
+untouched test copies: earlier runs may already have written a release ID or
+catalog, and those existing facts are deliberately not erased automatically.
+
+The master query uses these existing indexed paths:
+
+```sql
+SELECT id, title, genres, styles
+FROM masters WHERE title = :base_title COLLATE NOCASE
+UNION
+SELECT m.id, m.title, m.genres, m.styles
+FROM masters m JOIN releases r ON r.master_id = m.id
+WHERE r.title_key = :base_title_key
+ORDER BY id;
+```
+
+Matching still validates the credited artist and title, and respects an existing
+`DISCOGSMASTERID`. A master is an album group, not proof of which pressing is
+owned. Its main-release ID is never treated as the owned release ID.
