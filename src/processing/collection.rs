@@ -11,7 +11,38 @@ use std::{
     fs::{self, File, FileTimes, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    time::Instant,
 };
+
+// Drop reports failed stages as well as successful ones.
+struct Stage<'a> {
+    path: &'a Path,
+    name: &'static str,
+    start: Instant,
+    enabled: bool,
+}
+impl<'a> Stage<'a> {
+    fn new(path: &'a Path, name: &'static str, enabled: bool) -> Self {
+        Self {
+            path,
+            name,
+            start: Instant::now(),
+            enabled,
+        }
+    }
+}
+impl Drop for Stage<'_> {
+    fn drop(&mut self) {
+        if self.enabled {
+            eprintln!(
+                "  Collection timing [{}] {}: {:.3}s",
+                self.path.display(),
+                self.name,
+                self.start.elapsed().as_secs_f64()
+            );
+        }
+    }
+}
 
 // Explicit unlock prevents a concurrently forked helper from extending a lock's lifetime.
 struct FileLock(File);
@@ -313,7 +344,41 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         && a.ctime() == b.ctime()
         && a.ctime_nsec() == b.ctime_nsec()
 }
+#[cfg(test)]
 fn update(path: &Path, original: &Tags, desired: &Tags) -> Result<bool> {
+    update_timed(path, original, desired, false)
+}
+fn retry_write(
+    path: &Path,
+    mut write: impl FnMut() -> Result<()>,
+    mut pause: impl FnMut(std::time::Duration) -> Result<()>,
+) -> Result<()> {
+    for attempt in 1..=3 {
+        match write() {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let io_error = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.raw_os_error() == Some(libc::EIO))
+                });
+                if !io_error || attempt == 3 {
+                    return Err(error);
+                }
+                let seconds = 5 << (attempt - 1);
+                eprintln!(
+                    "  Tag write I/O error 5 [{}], attempt {attempt}/3; retrying in {seconds}s",
+                    path.display()
+                );
+                pause(std::time::Duration::from_secs(seconds))?;
+            }
+        }
+    }
+    unreachable!()
+}
+
+fn update_timed(path: &Path, original: &Tags, desired: &Tags, timings: bool) -> Result<bool> {
+    let check_stage = Stage::new(path, "prewrite_checks", timings);
     shutdown::check()?;
     if original == desired && tagging::raw_tags(path)? == *desired {
         return Ok(false);
@@ -342,8 +407,34 @@ fn update(path: &Path, original: &Tags, desired: &Tags) -> Result<bool> {
         "Media changed before collection update"
     );
     shutdown::check()?;
+    drop(check_stage);
     preserve_times(source, &before, || {
-        tagging::write(path, desired)?;
+        {
+            let _stage = Stage::new(path, "write_tags", timings);
+            retry_write(
+                path,
+                || tagging::write(path, desired),
+                |delay| {
+                    let started = Instant::now();
+                    while started.elapsed() < delay {
+                        ensure!(
+                            !shutdown::requested(),
+                            "Stop requested during tag write retry wait"
+                        );
+                        std::thread::sleep(
+                            (delay - started.elapsed().min(delay))
+                                .min(std::time::Duration::from_millis(50)),
+                        );
+                    }
+                    ensure!(
+                        !shutdown::requested(),
+                        "Stop requested before tag write retry"
+                    );
+                    Ok(())
+                },
+            )?;
+        }
+        let _stage = Stage::new(path, "tag_readback", timings);
         let actual = tagging::read_metadata(path)?;
         for (key, values) in desired {
             ensure!(
@@ -452,9 +543,18 @@ struct Walked {
     changed: usize,
     matched: usize,
 }
+#[cfg(test)]
 fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
+    release_timed(paths, library, false)
+}
+fn release_timed(paths: &[PathBuf], library: &Path, timings: bool) -> Result<Walked> {
+    let folder = paths[0].parent().unwrap_or(&paths[0]);
+    let _total = Stage::new(folder, "total", timings);
+    let setup = Stage::new(folder, "library_setup", timings);
     let db = Database::read_only(library.to_str().context("Library path is not UTF-8")?)?;
     let allowed = vocabulary(&db)?;
+    drop(setup);
+    let reads = Stage::new(folder, "read_tags", timings);
     let mut groups: BTreeMap<String, Vec<Track>> = BTreeMap::new();
     let mut originals = BTreeMap::new();
     for path in paths {
@@ -471,6 +571,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
                 duration: 0.0, // Not inspected or used for collection metadata work.
             });
     }
+    drop(reads);
     let mut changed = 0;
     let mut matched = 0;
     let mut identities = Vec::new();
@@ -492,6 +593,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
             publish: String::new(),
             url: String::new(),
         };
+        let lookup = Stage::new(folder, "discogs_lookup", timings);
         let found = if artist.is_empty()
             || album.is_empty()
             || common(&tracks, "ALBUMARTIST").is_err()
@@ -501,6 +603,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
         } else {
             discogs::find_collection(&db, &info, &tracks)?
         };
+        drop(lookup);
         let original = tracks
             .iter()
             .map(|t| originals.remove(&t.path).expect("original track tags"))
@@ -512,7 +615,7 @@ fn release(paths: &[PathBuf], library: &Path) -> Result<Walked> {
         for (track, before) in tracks.iter_mut().zip(original) {
             clean(&mut track.tags, &artist, found.as_ref(), &allowed);
             changed += usize::from(
-                update(&track.path, &before, &track.tags)
+                update_timed(&track.path, &before, &track.tags, timings)
                     .with_context(|| format!("Update {}", track.path.display()))?,
             );
         }
@@ -556,7 +659,40 @@ fn already_walked(
     }
 }
 
+fn stream_jobs<T: Sync, R: Send>(
+    jobs: &[T],
+    parallel: usize,
+    work: impl Fn(&T) -> R + Sync,
+    mut completed: impl FnMut(R) -> bool,
+) -> Result<()> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(parallel)
+        .build()?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(parallel);
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            pool.install(|| {
+                jobs.par_iter().for_each_with(sender, |sender, job| {
+                    if !shutdown::requested() && !stopped.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = sender.send(work(job));
+                    }
+                })
+            });
+        });
+        // Always drain so bounded senders cannot deadlock during shutdown.
+        for result in receiver {
+            if !completed(result) {
+                stopped.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    });
+    Ok(())
+}
+
 pub(crate) fn run(args: &Args) -> Result<()> {
+    let _wall = Stage::new(&args.output, "wall", args.timings);
     let root = args
         .serverdir
         .as_ref()
@@ -594,8 +730,9 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     eprintln!(
         "Collection window: media modified after {from} (UTC); --force does not bypass this cutoff"
     );
+    let scan = Stage::new(&root, "enumerate", args.timings);
     let mut outside = 0;
-    let mut pending = vec![root];
+    let mut pending = vec![root.clone()];
     let mut folders = Vec::new();
     while let Some(folder) = pending.pop() {
         shutdown::check()?;
@@ -630,44 +767,42 @@ pub(crate) fn run(args: &Args) -> Result<()> {
             }
         }
     }
+    drop(scan);
     folders.sort_by(|a, b| a.0.cmp(&b.0));
     let mut attempted = 0;
     let mut changed = 0;
     let mut matches = 0;
     let mut failures = 0;
     let mut skipped = 0;
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(usize::from(args.parallel.unwrap_or(3)))
-        .build()?;
-    // Keep dispatch bounded so a stop never leaves an unbounded queue of releases.
-    for chunk in folders.chunks(usize::from(args.parallel.unwrap_or(3))) {
+    let selection = Stage::new(&args.output, "history_selection", args.timings);
+    let mut jobs = Vec::new();
+    for (folder, files, latest) in &folders {
         shutdown::check()?;
-        let mut jobs = Vec::new();
-        for (folder, files, latest) in chunk {
-            if args.count.is_some_and(|n| attempted >= n) {
-                break;
-            }
-            if !args.force && already_walked(&history, folder, *latest)? {
-                skipped += 1;
-                continue;
-            }
-            if args.artist.as_ref().is_some_and(|artist| {
-                !folder
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&artist.to_lowercase())
-            }) {
-                continue;
-            }
-            attempted += 1;
-            jobs.push((folder, files));
+        if args.count.is_some_and(|n| attempted >= n) {
+            break;
         }
-        let results = pool.install(|| {
-            jobs.par_iter()
-                .map(|(folder, files)| (folder, release(files, &library)))
-                .collect::<Vec<_>>()
-        });
-        for (folder, result) in results {
+        if !args.force && already_walked(&history, folder, *latest)? {
+            skipped += 1;
+            continue;
+        }
+        if args.artist.as_ref().is_some_and(|artist| {
+            !folder
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(&artist.to_lowercase())
+        }) {
+            continue;
+        }
+        attempted += 1;
+        jobs.push((folder, files));
+    }
+    drop(selection);
+    let mut history_error = None;
+    stream_jobs(
+        &jobs,
+        usize::from(args.parallel.unwrap_or(3)),
+        |(folder, files)| (*folder, release_timed(files, &library, args.timings)),
+        |(folder, result)| {
             match result {
                 Ok(Walked {
                     identities,
@@ -675,7 +810,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
                     matched: m,
                 }) => {
                     for (artist, title) in identities {
-                        history.query("INSERT INTO collection VALUES(?,?,?,?) ON CONFLICT(path,artist,title) DO UPDATE SET walk_date=excluded.walk_date",&[folder.to_str().unwrap(),&artist,&title,&chrono::Utc::now().to_rfc3339()])?;
+                        if history_error.is_none()
+                            && let Err(error) = history.query(
+                                "INSERT INTO collection VALUES(?,?,?,?) ON CONFLICT(path,artist,title) DO UPDATE SET walk_date=excluded.walk_date",
+                                &[folder.to_str().unwrap(), &artist, &title, &chrono::Utc::now().to_rfc3339()],
+                            )
+                        {
+                            history_error = Some(error);
+                        }
                     }
                     changed += n;
                     matches += m;
@@ -684,17 +826,19 @@ pub(crate) fn run(args: &Args) -> Result<()> {
                         folder.display()
                     );
                 }
-                Err(error) if shutdown::requested() => return Err(error),
+                Err(_) if shutdown::requested() => (),
                 Err(error) => {
                     failures += 1;
                     eprintln!("  Failed collection {}: {error:#}", folder.display());
                 }
             }
-        }
-        if args.count.is_some_and(|n| attempted >= n) {
-            break;
-        }
+            history_error.is_none()
+        },
+    )?;
+    if let Some(error) = history_error {
+        return Err(error);
     }
+    shutdown::check()?;
     println!(
         "Collection: {attempted} folders attempted, {changed} files updated, {matches} matched, {skipped} skipped, {outside} outside date window, {failures} failed"
     );
@@ -796,6 +940,7 @@ mod tests {
             let stamp = std::time::UNIX_EPOCH + std::time::Duration::new(1_600_000_000, 123456789);
             File::open(&path).unwrap().set_modified(stamp).unwrap();
             let before = tagging::read(&path).unwrap().0;
+            assert_eq!(tagging::read_metadata(&path).unwrap(), before, "{ext}");
             let hash = super::super::pcm_hash(&path).unwrap();
             let inode = fs::metadata(&path).unwrap().ino();
             let mut desired = before.clone();
@@ -1356,5 +1501,104 @@ mod tests {
                 .to_string()
                 .contains("hard-linked")
         );
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    #[test]
+    fn completion_stream_refills_workers_before_slow_folder_finishes() {
+        let (release, wait) = std::sync::mpsc::channel();
+        let wait = std::sync::Mutex::new(wait);
+        let mut fast = 0;
+        stream_jobs(
+            &[0, 1, 2, 3, 4, 5],
+            3,
+            |job| {
+                if *job == 0 {
+                    wait.lock()
+                        .unwrap()
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .expect("slow folder blocked all subsequent work");
+                }
+                *job
+            },
+            |job| {
+                if job != 0 {
+                    fast += 1;
+                }
+                if fast == 5 {
+                    release.send(()).unwrap();
+                }
+                true
+            },
+        )
+        .unwrap();
+        assert_eq!(fast, 5);
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use clap::Parser;
+    #[test]
+    fn collection_accepts_timings_but_acquisition_does_not() {
+        let args = crate::Args::try_parse_from([
+            "bcfunl",
+            "--collection",
+            "--serverdir",
+            "/music",
+            "--timings",
+        ])
+        .unwrap();
+        assert!(args.validate().is_ok());
+        let args = crate::Args::try_parse_from(["bcfunl", "--timings"]).unwrap();
+        assert!(args.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod write_retry_tests {
+    use super::*;
+    #[test]
+    fn io_error_five_retries_twice_with_exponential_delays() {
+        for succeeds in [false, true] {
+            let mut attempts = 0;
+            let mut delays = Vec::new();
+            let result = retry_write(
+                Path::new("fixture.flac"),
+                || {
+                    attempts += 1;
+                    if succeeds && attempts == 3 {
+                        return Ok(());
+                    }
+                    Err(std::io::Error::from_raw_os_error(libc::EIO)).context("write fixture")
+                },
+                |delay| {
+                    delays.push(delay.as_secs());
+                    Ok(())
+                },
+            );
+            assert_eq!(result.is_ok(), succeeds);
+            assert_eq!(attempts, 3);
+            assert_eq!(delays, [5, 10]);
+        }
+    }
+    #[test]
+    fn unrelated_errors_and_cancelled_waits_do_not_retry() {
+        for code in [libc::EACCES, libc::EIO] {
+            let mut attempts = 0;
+            let result = retry_write(
+                Path::new("fixture.flac"),
+                || {
+                    attempts += 1;
+                    Err(std::io::Error::from_raw_os_error(code).into())
+                },
+                |_| anyhow::bail!("stop requested"),
+            );
+            assert!(result.is_err());
+            assert_eq!(attempts, 1);
+        }
     }
 }

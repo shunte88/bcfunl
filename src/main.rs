@@ -90,8 +90,8 @@ struct Args {
     /// Print a status table for releases attempted since this process started
     #[arg(long)]
     summary: bool,
-    /// Report processing stage durations, including failed stages
-    #[arg(long, requires = "process")]
+    /// Report process or collection stage durations, including failed stages
+    #[arg(long)]
     timings: bool,
     /// Tag and publish downloads, enriching from Discogs when credentials are configured
     #[arg(long)]
@@ -166,6 +166,10 @@ impl Args {
                 "--parallel must be 3-16 for --collection, or 2-8 for other modes"
             );
         }
+        ensure!(
+            self.process || self.collection || !self.timings,
+            "--timings requires --process or --collection"
+        );
         ensure!(
             self.process || self.collection || self.serverdir.is_none(),
             "--serverdir requires --process or --collection"

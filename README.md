@@ -189,16 +189,25 @@ so it includes the approved genre list:
 
 ./bcfunl --collection --serverdir /path/to/music \
   --output ./downloads --library ./downloads/resources/library.sqlite3 \
-  --parallel 3 --count 10 --summary
+  --parallel 3 --count 10 --summary --timings
 ```
 
 If the library is already built, use `--resources --genres-only` for the genre
 update instead of a full resource run.
 
+Workers take the next folder as soon as one finishes. Results appear as folders
+finish, so a slow album does not hold up the next group. Add `--timings` to see
+time spent finding files, reading tags, matching Discogs, writing tags, and
+checking the saved tags. File names appear beside the timings so you can spot
+slow files. Parallel timings overlap; they should not be added together.
+
 Start with a small batch you have backed up. Tags are written directly, without
 copying or decoding whole audio files. File modification dates stay the same,
 existing artwork stays, and no new artwork is added. A requested stop lets the
 current metadata update finish first. Direct writes do not keep a rollback copy.
+A tag write that reports OS error 5 gets up to three total attempts, waiting
+5 seconds and then 10 seconds. If it still fails, the folder is logged for a
+later retry and other folders continue. A stop request interrupts the wait.
 Extra named tags are kept. Supported files are FLAC, MP3,
 WAV, AIFF, M4A, and Ogg Vorbis; other formats and symbolic links are left alone.
 

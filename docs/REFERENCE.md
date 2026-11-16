@@ -63,7 +63,7 @@ Options:
 | `--output` | Download directory; defaults to `downloads`. Also holds the history database. |
 | `--format` | Case-insensitive lossless preference: `flac` (default), `wav`, `alac`, or `aiff-lossless`. Also accepts `aac-hi`, `vorbis`, `mp3-320`, `mp3-v0`, and legacy `mp3`; these keep the standard fallback order and never force lossy over lossless. |
 | `--parallel` | Run 2-8 releases concurrently. Download mode uses aria2c with up to 16 connections per server per release; `--process` uses local workers. Omit for sequential work. |
-| `--timings` | With `--process`, report per-release stage times, history checks, and cleanup duration, including failed stages. |
+| `--timings` | With `--process` or `--collection`, report stage durations, including failed stages. Collection includes enumeration, history selection, library setup, tag reads, Discogs lookup, prewrite checks, writes, readback, and wall time. |
 | `--summary` | Print per-release results and a collection-wide status grid; processing also retains attempted/published/skipped/failed counts. |
 | `--force` | Retry completed work; download mode replaces matching files after successful transfer. Processing never overwrites server releases. |
 | `--process` | Tag, verify and publish downloads; use Discogs enrichment when credentials are configured. |
@@ -1439,3 +1439,32 @@ Later external edits therefore make it eligible again without `--force`.
 Collection tag writes still preserve modification times, so they do not make
 old releases look new. The walk must still enumerate folders and read file
 timestamps; it cannot safely prune using parent-directory timestamps.
+
+### Collection performance measurements
+
+Collection workers continuously take the next eligible folder, up to `--parallel`.
+Results and history are recorded in completion order. A slow folder does not
+hold back a whole batch. The completion channel is bounded; music is not loaded
+into album-sized memory buffers. Shutdown stops new work and drains completed
+results. A history write error stops further dispatch after workers observe it;
+in-flight file edits still finish.
+
+Use `--collection --timings` to see enumeration and history-selection times,
+per-folder library setup, metadata reads, Discogs matching and total times, and
+per-file prewrite checks, tag writes and readback. Failed stages report elapsed
+time too. Concurrent durations overlap; `wall` is the whole collection run.
+Enumeration still completes before the first folder is processed.
+
+FLAC metadata reads combine canonical comments and existing ID3 metadata in one
+container parse. FLAC and Ogg writes skip an unrelated alternate-store scan.
+Other formats retain their alternate-tag-store handling. Prewrite stale-tag and
+file-identity checks, readback verification, artwork preservation and timestamp
+restoration remain enabled. No whole-file buffering or NVMe scratch copies are
+introduced. Backend data shifting can still occur when metadata outgrows padding.
+
+Collection tag writes retry OS error 5 (EIO) only: three total attempts with
+5-second and 10-second waits. Other errors are not retried by this rule. The
+write timer includes retries and waits. Exhausted failures retain failed-folder
+retryability; other folders continue. A stop request cancels the wait and the
+original timestamp restoration is still attempted. Direct edits have no
+rollback copy; a partial storage write can still require repair or restoration.

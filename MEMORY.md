@@ -3696,3 +3696,51 @@ Strict locked Clippy, formatting, locked optimized build, actual CLI smoke,
 workflow regression and Compose config passed. check-build.sh still blocked at
 Docker daemon access. Live NAS performance/window acceptance and image/package
 gates remain pending. No running jobs or live files were changed/deployed.
+
+## 2026-11-15 handoff: v0.2.5 continuous collection workers and measurements
+
+Stue approved performance changes 1-3 only: remove folder batch barriers, expose
+collection stage timings, reduce redundant metadata parsing. Whole-file RAM
+buffers/NVMe scratch copies are deferred until measured live results. Live
+media2026 has 32GB RAM, local NVMe history/library and NAS NFS music; reported
+54MB application memory, low CPU periods with continuing I/O. No live trace or
+remote benchmark is available, so storage latency remains a hypothesis.
+
+Collection uses a fixed Rayon pool with continuous folder scheduling and a
+bounded completion channel to the main/history thread. Results/history are
+handled as folders finish; no slowest-folder batch barrier. History selection
+and date/count filtering precede worker dispatch. Enumeration still precedes
+processing. Stop requests skip new jobs, drain finished results, preserve the
+existing per-file shutdown unit. History write failure stops further dispatch
+once workers observe it, drains in-flight results and returns failure. No DB
+writer was moved into workers. No whole-album buffering or extra media copies.
+
+--timings now accepts --collection or --process, rejected for acquisition alone.
+Collection emits enumeration, history_selection, library_setup, read_tags,
+discogs_lookup, prewrite_checks, write_tags, tag_readback, per-folder total and
+whole-run wall. Drop-based timers include failed stages, concurrent times
+overlap, write_tags includes retry waits. Path labels identify slow files.
+FLAC read_metadata now combines ID3 plus canonical Vorbis comments in one typed
+parse. FLAC/Ogg writers skip the unrelated alternate-store reread. Other formats
+keep generic/native and alternate-store handling. Prewrite stale metadata and
+file identity checks, readback, preserved artwork/extra tags and exact restored
+mtime remain. Native backend may still shift payload if metadata grows.
+
+Stue also requested error 5 write retries: interpreted explicit "3 failures" as
+THREE TOTAL attempts, not initial plus three retries. Only EIO in the write
+error source chain retries. Wait 5s, then 10s. Other error codes retain handling.
+Stop during wait cancels retries (50ms polling), timestamp restoration still
+attempted. Final failure logs and leaves folder retryable; other folders run.
+Partial direct edits cannot be rolled back and storage damage may need repair.
+Tests use injected waits, no actual 15s delay. User was told exact attempt count.
+
+Version 0.2.5. 189 tests passed, 0 failed, 5 ignored. Tests prove slow first
+folder cannot block later jobs, metadata-only read parity across six formats,
+collection timing CLI acceptance, non-collection rejection, EIO success/final
+failure after exactly 3 attempts and waits 5/10, unrelated errors and cancelled
+waits not retried. Existing shutdown/mtime/artwork/audio tests pass. Locked
+Clippy, formatting, release build, real CLI smoke (asserts collection timing
+labels with runtime PATH=/nonexistent), workflow regression, Compose config,
+and git diff --check passed. check-build.sh attempted: blocked Docker daemon
+access. Full image/package gate and live media2026 performance remain pending.
+README/reference updated. No deployment, source music edits, commit or push.

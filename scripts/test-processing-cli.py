@@ -36,9 +36,11 @@ with tempfile.TemporaryDirectory(prefix='bcfunl-governor-smoke-') as temp:
  with sqlite3.connect(stage/'collection.sqlite3') as db:
   assert db.execute('SELECT process_date FROM releases').fetchone()[0]
  published=list(server.rglob('*.flac'));stamps={p:p.stat().st_mtime_ns for p in published}
- result=subprocess.run([binary,'--collection','--parallel','3','--user','johnsmith','--output',str(stage),'--serverdir',str(server),'--count','1','--summary'],env=env,capture_output=True,text=True,timeout=60)
+ result=subprocess.run([binary,'--collection','--timings','--parallel','3','--user','johnsmith','--output',str(stage),'--serverdir',str(server),'--count','1','--summary'],env=env,capture_output=True,text=True,timeout=60)
  assert result.returncode==0,result.stderr
  assert '1 matched' in result.stdout,result.stdout
+ for stage_name in ['enumerate','history_selection','library_setup','read_tags','discogs_lookup','prewrite_checks','total','wall']:
+  assert re.search(r'Collection timing .* '+stage_name+r': [0-9.]+s',result.stderr),result.stderr
  assert all(p.stat().st_mtime_ns==stamps[p] for p in published)
  with sqlite3.connect(stage/'collection.sqlite3') as db:
   rows=db.execute('SELECT artist,title FROM collection').fetchall()

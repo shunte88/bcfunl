@@ -85,7 +85,9 @@ pub(super) fn read_tags(path: &Path) -> Result<Tags> {
     Ok(normalize_tags(raw_tags(path)?))
 }
 pub(super) fn raw_tags(path: &Path) -> Result<Tags> {
-    let native = native(path)?;
+    Ok(native_tags(native(path)?))
+}
+fn native_tags(native: Native) -> Tags {
     let mut tags = match &native {
         Native::Vorbis(comments) => {
             let mut tags = Tags::new();
@@ -131,10 +133,25 @@ pub(super) fn raw_tags(path: &Path) -> Result<Tags> {
         }
         _ => (),
     }
-    Ok(tags)
+    tags
 }
 pub(super) fn read_metadata(path: &Path) -> Result<Tags> {
     crate::shutdown::check()?;
+    if super::extension(path) == "flac" {
+        let mut source = File::open(path)?;
+        let file = lofty::flac::FlacFile::read_from(
+            &mut source,
+            ParseOptions::new().read_properties(false),
+        )?;
+        let mut tags = file
+            .id3v2()
+            .map(|id3| generic(&Tag::from(id3.clone())))
+            .unwrap_or_default();
+        tags.extend(native_tags(Native::Vorbis(
+            file.vorbis_comments().cloned().unwrap_or_default(),
+        )));
+        return Ok(normalize_tags(tags));
+    }
     let file = lofty::probe::Probe::open(path)?
         .options(ParseOptions::new().read_properties(false))
         .read()?;
@@ -307,6 +324,10 @@ pub fn write(path: &Path, tags: &Tags) -> Result<()> {
             }
             ilst.save_to_path(path, WriteOptions::default())?;
         }
+    }
+    // FLAC and Ogg have no alternate stores handled by the pass below.
+    if matches!(super::extension(path).as_str(), "flac" | "ogg") {
+        return Ok(());
     }
     // Keep alternate stores (RIFF INFO, AIFF text, ID3v1/APE) consistent too.
     let file = lofty::probe::Probe::open(path)?
