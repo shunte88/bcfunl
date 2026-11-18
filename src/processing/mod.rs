@@ -1368,9 +1368,8 @@ pub fn run(args: &Args) -> Result<()> {
                 continue;
             }
             if retry && !retry_phase {
-                while let Some((release, task)) = active.pop_front() {
-                    let result = task
-                        .join()
+                while let Some((release, result)) = crate::workers::join_next(&mut active) {
+                    let result = result
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
                     record(&release, result, &mut skipped)?;
                 }
@@ -1391,9 +1390,8 @@ pub fn run(args: &Args) -> Result<()> {
                 if active.len() < allowed {
                     break;
                 }
-                if let Some((release, task)) = active.pop_front() {
-                    let result = task
-                        .join()
+                if let Some((release, result)) = crate::workers::join_next(&mut active) {
+                    let result = result
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
                     record(&release, result, &mut skipped)?;
                 } else {
@@ -1470,17 +1468,15 @@ pub fn run(args: &Args) -> Result<()> {
                 }
             }
             if active.len() == limit {
-                let (release, task) = active.pop_front().unwrap();
-                let result = task
-                    .join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+                let (release, result) = crate::workers::join_next(&mut active).unwrap();
+                let result =
+                    result.unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
                 record(&release, result, &mut skipped)?;
             }
         }
-        for (release, task) in active {
-            let result = task
-                .join()
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
+        while let Some((release, result)) = crate::workers::join_next(&mut active) {
+            let result =
+                result.unwrap_or_else(|_| Err(anyhow::anyhow!("Processing worker panicked")));
             record(&release, result, &mut skipped)?;
         }
         Ok(())

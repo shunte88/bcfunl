@@ -8,8 +8,8 @@ Do not change it automatically. No proactive notification was scheduled because
 this session has no general reminder/scheduling tool.
 
 
-Updated: 2026-11-15 (America/New_York)
-Local release: **v0.2.5**, continuous collection workers, timings and EIO retries; Docker/live acceptance pending
+Updated: 2026-11-18 (America/New_York)
+Local release: **v0.2.6**, completion-aware processing workers; VCW pin aligned, native checks green; Docker gate blocked
 
 ## Current outcome
 
@@ -3254,3 +3254,65 @@ labels with runtime PATH=/nonexistent), workflow regression, Compose config,
 and git diff --check passed. check-build.sh attempted: blocked Docker daemon
 access. Full image/package gate and live media2026 performance remain pending.
 README/reference updated. No deployment, source music edits, commit or push.
+
+## Live feedback: v0.2.5 collection scheduling
+
+Stue reports the latest build looks very promising: the previous pauses are no
+longer visible, and the parallel pool appears responsive and working correctly.
+Monitoring continues. This is positive live qualitative acceptance of continuous
+scheduling, not a completed-run result or measured throughput benchmark. Keep
+whole-file buffering/NVMe scratch deferred. No new implementation requested.
+Local Docker/image validation remains unverified by the agent; prior native
+checks were green. No runtime settings or live jobs changed in this follow-up.
+
+## 2026-11-18 handoff: v0.2.6 completion-aware process workers
+
+Stue requested the collection scheduling benefit for --process. Changed all
+processing worker joins (admission, parallel-capacity refill, fresh/retry phase
+boundary, final drain) to workers::join_next. It scans bounded active handles
+for is_finished(), joins whichever finishes first, and sleeps 5ms if none are
+ready. This removes launch-order head-of-line blocking without replacing the
+resource-governed scoped workers with a fixed Rayon release pool. Existing
+shared track pool, dynamic --nice admission, process parallel 2-8, default
+sequential behavior, count rules, fresh-before-retry ordering, CRC recovery,
+worker-panic conversion, stop/drain behavior and main-thread SQLite writes stay.
+No need for whole-file buffering or new dependencies. CRC recovery remains
+synchronous in the coordinator; this update targets worker join ordering only.
+
+Tests demonstrate a fast second worker admits a replacement which releases a
+blocked first worker, empty drain and panic propagation. All 191 tests passed,
+0 failed, 5 ignored. Locked Clippy, fmt, locked optimized build, real native CLI
+smoke, workflow regression, Compose config and diff whitespace checks passed.
+README/reference updated. No live benchmark, deployment, commit or push.
+
+Full check-build.sh blocked BEFORE Docker: pinned VCW revision is
+69fa79c5f2d361faab2229a710fa83ed46edce23 but local sibling checkout is
+2766c9ee72c171b02fd5684f6045daacd13cb4df. Existing user changes in Cargo.lock
+already changed vcw-metadata/types 0.4.0 to 0.5.0 before this task. Preserved those
+changes; did not silently update .github/vcw-revision or sibling sources. Native
+checks thus validate current local VCW 0.5.0, not pinned CI checkout. Reproducible
+CI/container/package readiness remains pending alignment of the VCW dependency.
+Agent did not claim all gates green or alter the pin to hide drift.
+
+## 2026-11-18 follow-up: align VCW integration with current tip checkout
+
+Stue explicitly authorized updating VCW integration to tip release. Updated
+.github/vcw-revision to 2766c9ee72c171b02fd5684f6045daacd13cb4df, matching clean
+local sibling HEAD and locally recorded origin/main. Its shared metadata/types
+crate versions are 0.5.0; retained existing matching lockfile entries. No new
+lock regeneration or dependency changes. GitHub network verification attempted
+via ls-remote failed DNS, so newer remote commits cannot be excluded.
+
+Root cause of the earlier gate failure was old bcfunl pin against newer shared
+crate versions, not a requirement to build VCW first. README now explains sibling
+checkout alignment, fetch/checkout pinned revision, stable Rust and locked
+build. CI checks out that same pin for both native builds and Docker publication.
+VCW uses stable channel, workspace minimum rust-version 1.90; installed rustc
+is 1.99.1, not the user's mentioned 1.99.12. No compiler version setting changed.
+No sibling files changed, no remote fetch/pull succeeded.
+
+191 tests, strict locked Clippy, locked release build, real CLI smoke, workflow
+regression, formatting and diff whitespace checks green. Full check-build now
+passes VCW revision/clean-source checks, then stops at unavailable Docker daemon.
+This supersedes the earlier VCW mismatch readiness blocker. Container/package
+and latest-remote verification remain pending. Release stays v0.2.6.

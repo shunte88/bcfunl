@@ -178,6 +178,10 @@ These examples keep your staged downloads. Add `--clean` after you are happy
 with the results. For existing extract files and more options, see the
 [Discogs resource guide](docs/REFERENCE.md#monthly-discogs-research-resources).
 
+Processing handles finished release workers as they complete, so a slow earlier
+release does not hold up the next available slot. `--parallel` and the `--nice`
+resource budget still limit how much work runs at once.
+
 ### Tidy an existing music collection
 
 Have music from CDs, vinyl, or other download stores? Use `--collection` to clean
@@ -304,6 +308,20 @@ Native processing targets **Linux and macOS**. Native Windows supports downloads
 and resources; use the Linux container for processing and cleanup. All native
 binaries need a system SQLite library and the utilities for the selected workflow. A compatible prebuilt executable needs neither Rust nor
 the sibling VCW source checkout at runtime.
+
+When building from source, bcfunl uses the shared VCW crates from a sibling
+`vcw` folder. Keep that checkout at the revision in `.github/vcw-revision` and
+keep bcfunl's `Cargo.lock` with it. Building VCW separately is not required.
+To align an existing checkout before building:
+
+```sh
+git -C ../vcw fetch origin
+git -C ../vcw checkout "$(cat .github/vcw-revision)"
+cargo +stable build --locked --release
+```
+
+The build uses stable Rust. Updating the shared VCW dependency requires updating
+both its pinned revision and bcfunl's lockfile together; CI checks that they agree.
 
 | Utility | Used for |
 | --- | --- |

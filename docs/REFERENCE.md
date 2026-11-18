@@ -1468,3 +1468,18 @@ write timer includes retries and waits. Exhausted failures retain failed-folder
 retryability; other folders continue. A stop request cancels the wait and the
 original timestamp restoration is still attempted. Direct edits have no
 rollback copy; a partial storage write can still require repair or restoration.
+
+### Processing worker admission
+
+`--process` joins completed release workers independently of submission order.
+When a slot is needed, the coordinator checks for a finished worker every 5 ms,
+records that result on the history thread, and admits the next eligible release.
+It does not wait specifically for the oldest active release. This also applies
+to the fresh/retry phase boundary and final drain. Fresh work still finishes
+before the retry phase begins, and retries remain outside `--count`.
+
+Processing retains bounded scoped release threads, its existing shared track
+pool, `--parallel` limits and dynamic `--nice` admission. It does not adopt the
+collection Rayon pool because processing must respect changing resource limits.
+Worker panics are returned as failures. Stop requests still drain active work
+and preserve committed history. CRC recovery remains coordinated as before.
